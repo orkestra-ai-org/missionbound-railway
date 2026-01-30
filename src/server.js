@@ -10,12 +10,10 @@ import * as tar from "tar";
 
 // Railway commonly sets PORT=8080 for HTTP services.
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
-const STATE_DIR =
-  process.env.OPENCLAW_STATE_DIR?.trim() ||
-  path.join(os.homedir(), ".openclaw");
-const WORKSPACE_DIR =
-  process.env.OPENCLAW_WORKSPACE_DIR?.trim() ||
-  path.join(STATE_DIR, "workspace");
+
+// Hard-coded Openclaw directories for Railway deployment
+const STATE_DIR = "/data/.openclaw";
+const WORKSPACE_DIR = "/data/workspace";
 
 // Protect /setup with a user-provided password.
 const SETUP_PASSWORD = process.env.SETUP_PASSWORD?.trim();
@@ -75,17 +73,13 @@ console.log(`[token] Final resolved token: ${OPENCLAW_GATEWAY_TOKEN.slice(0, 16)
 console.log(`[token] ========== TOKEN RESOLUTION COMPLETE ==========\n`);
 
 // Where the gateway will listen internally (we proxy to it).
-const INTERNAL_GATEWAY_PORT = Number.parseInt(
-  process.env.INTERNAL_GATEWAY_PORT ?? "18789",
-  10,
-);
-const INTERNAL_GATEWAY_HOST = process.env.INTERNAL_GATEWAY_HOST ?? "127.0.0.1";
+const INTERNAL_GATEWAY_PORT = 18789;
+const INTERNAL_GATEWAY_HOST = "127.0.0.1";
 const GATEWAY_TARGET = `http://${INTERNAL_GATEWAY_HOST}:${INTERNAL_GATEWAY_PORT}`;
 
 // Always run the built-from-source CLI entry directly to avoid PATH/global-install mismatches.
-const OPENCLAW_ENTRY =
-  process.env.OPENCLAW_ENTRY?.trim() || "/openclaw/dist/entry.js";
-const OPENCLAW_NODE = process.env.OPENCLAW_NODE?.trim() || "node";
+const OPENCLAW_ENTRY = "/openclaw/dist/entry.js";
+const OPENCLAW_NODE = "node";
 
 function clawArgs(args) {
   return [OPENCLAW_ENTRY, ...args];
