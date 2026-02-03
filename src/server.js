@@ -709,17 +709,17 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
         }
       }
 
-      // Configure Atlas Cloud if selected
+      // Configure Atlas Cloud if selected (using OpenAI-compatible endpoint)
       if (payload.authChoice === "atlas-api-key") {
         await runCmd(
           OPENCLAW_NODE,
-          clawArgs(["config", "set", "env.ATLAS_API_BASE", "https://api.atlascloud.ai/v1/"]),
+          clawArgs(["config", "set", "env.OPENAI_BASE_URL", "https://api.atlascloud.ai/v1/"]),
         );
         await runCmd(
           OPENCLAW_NODE,
-          clawArgs(["config", "set", "env.ATLAS_API_MODEL", "zai-org/glm-4.7"]),
+          clawArgs(["config", "set", "env.OPENAI_MODEL", "minimaxai/minimax-m2.1"]),
         );
-        extra += "\n[atlas] configured Atlas Cloud with base URL and model\n";
+        extra += "\n[atlas] configured Atlas Cloud with OpenAI-compatible endpoint (model: minimaxai/minimax-m2.1)\n";
       }
 
       // Apply changes immediately.
