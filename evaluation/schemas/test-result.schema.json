@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orkestra.io/schemas/test-result.json",
+  "title": "Orkestra Test Result",
+  "description": "Schéma pour un résultat de test d'évaluation",
+  "type": "object",
+  "required": ["test_id", "agent_id", "timestamp", "result"],
+  "properties": {
+    "test_id": {
+      "type": "string",
+      "pattern": "^TEST-[A-Z][0-9]{3}$",
+      "description": "Identifiant unique du test"
+    },
+    "agent_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "Identifiant de l'agent testé"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Horodatage de l'exécution"
+    },
+    "category": {
+      "type": "string",
+      "enum": ["effectiveness", "efficiency", "robustness", "safety"],
+      "description": "Catégorie du test (4 piliers)"
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["P0", "P1", "P2", "P3"],
+      "description": "Priorité du test"
+    },
+    "result": {
+      "type": "string",
+      "enum": ["pass", "fail", "skip", "error"],
+      "description": "Résultat du test"
+    },
+    "input": {
+      "type": "string",
+      "description": "Input fourni à l'agent"
+    },
+    "expected_output": {
+      "type": "string",
+      "description": "Output attendu"
+    },
+    "actual_output": {
+      "type": "string",
+      "description": "Output réel de l'agent"
+    },
+    "score": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Score de qualité (0-100)"
+    },
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "tokens_used": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "latency_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "notes": {
+      "type": "string",
+      "description": "Notes additionnelles"
+    }
+  }
+}

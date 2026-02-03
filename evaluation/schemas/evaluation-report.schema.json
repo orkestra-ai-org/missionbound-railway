@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orkestra.io/schemas/evaluation-report.json",
+  "title": "Orkestra Evaluation Report",
+  "description": "Schéma pour un rapport d'évaluation complet",
+  "type": "object",
+  "required": ["agent_id", "timestamp", "summary", "results"],
+  "properties": {
+    "agent_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "Identifiant de l'agent évalué"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Horodatage du rapport"
+    },
+    "version": {
+      "type": "string",
+      "description": "Version de l'agent testée"
+    },
+    "category_filter": {
+      "type": ["string", "null"],
+      "description": "Filtre de catégorie appliqué (null = tous)"
+    },
+    "summary": {
+      "type": "object",
+      "required": ["total", "passed", "failed", "skipped"],
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Nombre total de tests"
+        },
+        "passed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Tests réussis"
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Tests échoués"
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Tests ignorés"
+        },
+        "score": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Score global (null si pas de tests exécutés)"
+        },
+        "categories": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "total": { "type": "integer" },
+              "pass": { "type": "integer" },
+              "fail": { "type": "integer" },
+              "skip": { "type": "integer" }
+            }
+          },
+          "description": "Scores par catégorie"
+        }
+      }
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "$ref": "test-result.schema.json"
+      },
+      "description": "Liste des résultats de tests"
+    },
+    "recommendations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "priority": {
+            "type": "string",
+            "enum": ["P0", "P1", "P2", "P3"]
+          },
+          "category": {
+            "type": "string"
+          },
+          "recommendation": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "Recommandations d'amélioration"
+    }
+  }
+}

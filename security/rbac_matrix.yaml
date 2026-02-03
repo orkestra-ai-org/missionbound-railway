@@ -1,0 +1,109 @@
+# rbac_matrix.yaml — Orkestra Role-Based Access Control
+# Version: 1.0.0
+
+roles:
+  L1:
+    name: "Read-only"
+    description: "Lecture doctrine entreprise uniquement"
+    permissions:
+      enterprise_read: true
+      enterprise_write: false
+      agent_workspace_read: true
+      agent_workspace_write: false
+      memory_read: true
+      memory_write: false
+      integrations: []
+    use_cases:
+      - "Agent d'observation"
+      - "Agent de monitoring"
+      - "Agent de reporting read-only"
+
+  L2:
+    name: "Agent workspace"
+    description: "Écriture dans son propre workspace"
+    inherits: "L1"
+    permissions:
+      agent_workspace_write: true
+      memory_write: true
+      integrations:
+        - pattern: "own_workspace/*"
+          mode: "rw"
+    use_cases:
+      - "Agent opérationnel standard"
+      - "Agent de traitement"
+
+  L3:
+    name: "Cross-agent read"
+    description: "Lecture d'autres workspaces agents"
+    inherits: "L2"
+    permissions:
+      cross_agent_read: true
+      integrations:
+        - pattern: "agents/*/MEMORY.md"
+          mode: "r"
+        - pattern: "agents/*/IDENTITY.md"
+          mode: "r"
+    use_cases:
+      - "Agent coordinateur"
+      - "Agent d'analyse transverse"
+
+  L4:
+    name: "Propose + CEO sync"
+    description: "Peut proposer des modifications enterprise avec review CEO"
+    inherits: "L3"
+    permissions:
+      enterprise_propose: true
+      ceo_sync_required: true
+      sync_timeout_minutes: 15
+    restrictions:
+      - "JAMAIS d'écriture directe enterprise"
+      - "Toute modification = PR-like avec diff"
+      - "CEO review obligatoire sous 15min ou rollback"
+    use_cases:
+      - "Launchpad"
+      - "Agent stratégique senior"
+
+access_matrix:
+  # Format: resource -> [L1, L2, L3, L4]
+  resources:
+    "enterprise/STRATEGY.md":
+      L1: "r"
+      L2: "r"
+      L3: "r"
+      L4: "r+propose"
+
+    "enterprise/DECISIONS.md":
+      L1: "r"
+      L2: "r"
+      L3: "r"
+      L4: "r+propose"
+
+    "enterprise/STANDARDS.md":
+      L1: "r"
+      L2: "r"
+      L3: "r"
+      L4: "r"
+
+    "enterprise/RUNBOOK.md":
+      L1: "r"
+      L2: "r"
+      L3: "r"
+      L4: "r"
+
+    "agents/{self}/*":
+      L1: "r"
+      L2: "rw"
+      L3: "rw"
+      L4: "rw"
+
+    "agents/{other}/*":
+      L1: "-"
+      L2: "-"
+      L3: "r"
+      L4: "r"
+
+enforcement:
+  mode: "strict"
+  violation_action: "deny_and_log"
+  escalation_on_violation: true
+  audit_trail: true

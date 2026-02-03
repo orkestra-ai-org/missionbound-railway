@@ -1,0 +1,99 @@
+# egress_policy.yaml — Orkestra Network Egress Control
+# Version: 1.0.0
+
+# Politique par défaut : deny-all
+# Chaque agent doit avoir une whitelist explicite
+
+default_policy: "deny-all"
+
+# Ordre de précédence (premier match gagne) :
+# 1. Endpoint spécifique (domain + path + method)
+# 2. Path pattern (domain + path)
+# 3. Domain seul
+
+rules:
+  # === INTEGRATIONS AUTORISÉES ===
+
+  - name: "Anthropic API"
+    domain: "api.anthropic.com"
+    path: "/v1/*"
+    methods: ["POST"]
+    action: "allow"
+    agents: ["*"]
+    notes: "API Claude pour tous les agents"
+
+  - name: "Supabase"
+    domain: "*.supabase.co"
+    path: "/rest/v1/*"
+    methods: ["GET", "POST", "PATCH", "DELETE"]
+    action: "allow"
+    agents: ["*"]
+    notes: "Base de données partagée"
+
+  - name: "Notion API"
+    domain: "api.notion.com"
+    path: "/v1/*"
+    methods: ["GET", "POST", "PATCH"]
+    action: "allow"
+    agents: ["launchpad", "notion-*"]
+    notes: "Agents Notion uniquement"
+
+  - name: "Gmail API"
+    domain: "gmail.googleapis.com"
+    path: "/*"
+    methods: ["GET", "POST"]
+    action: "allow"
+    agents: ["email-*"]
+    notes: "Agents email uniquement"
+
+  - name: "Google Calendar API"
+    domain: "www.googleapis.com"
+    path: "/calendar/*"
+    methods: ["GET", "POST", "PUT", "DELETE"]
+    action: "allow"
+    agents: ["calendar-*", "scheduler-*"]
+    notes: "Agents calendrier uniquement"
+
+  - name: "GitHub API"
+    domain: "api.github.com"
+    path: "/*"
+    methods: ["GET", "POST", "PATCH"]
+    action: "allow"
+    agents: ["dev-*", "code-*"]
+    notes: "Agents dev uniquement"
+
+  - name: "Telegram Bot API"
+    domain: "api.telegram.org"
+    path: "/bot*"
+    methods: ["GET", "POST"]
+    action: "allow"
+    agents: ["launchpad", "notifier-*"]
+    notes: "Notifications"
+
+  - name: "Slack API"
+    domain: "slack.com"
+    path: "/api/*"
+    methods: ["GET", "POST"]
+    action: "allow"
+    agents: ["slack-*", "notifier-*"]
+    notes: "Agents Slack uniquement"
+
+  # === BLOQUÉ EXPLICITEMENT ===
+
+  - name: "Block arbitrary web"
+    domain: "*"
+    path: "/*"
+    methods: ["*"]
+    action: "deny"
+    agents: ["*"]
+    notes: "Catch-all deny - browser OFF par défaut"
+
+monitoring:
+  log_all_requests: true
+  log_blocked_requests: true
+  alert_on_block: false
+  alert_threshold: 10  # Alerte si > 10 blocs/heure
+
+enforcement:
+  mode: "strict"
+  fail_closed: true  # Si doute, bloquer

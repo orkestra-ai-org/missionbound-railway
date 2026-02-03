@@ -1,0 +1,88 @@
+# governance.yaml — Orkestra Security Governance
+# Version: 1.0.0
+
+overview:
+  philosophy: "Defense-in-depth avec 5 couches de sécurité"
+  principle: "Least privilege par défaut"
+  north_star: "Zéro incident P0"
+
+layers:
+  - name: "Input Validation"
+    order: 1
+    description: "Validation et sanitization de tous les inputs"
+    controls:
+      - "Schema validation JSON"
+      - "Length limits"
+      - "Pattern matching"
+      - "Encoding normalization"
+
+  - name: "Tool Scoping"
+    order: 2
+    description: "Restriction des capabilities par agent"
+    controls:
+      - "Capabilities manifest par agent"
+      - "browser/exec OFF par défaut"
+      - "fs:write OFF par défaut"
+      - "Whitelist explicite"
+
+  - name: "Multi-Agent Validation"
+    order: 3
+    description: "Validation croisée entre agents"
+    controls:
+      - "Escalade obligatoire si doute"
+      - "Circuit breaker si anomalie"
+      - "Cross-check pour actions critiques"
+
+  - name: "Memory Monitoring"
+    order: 4
+    description: "Surveillance de la mémoire et des patterns"
+    controls:
+      - "Enterprise memory append-only"
+      - "CEO review pour modifications"
+      - "Anomaly detection"
+      - "Drift monitoring"
+
+  - name: "Circuit Breakers"
+    order: 5
+    description: "Mécanismes de coupure automatique"
+    controls:
+      - "Kill switch global"
+      - "Agent-level circuit breaker"
+      - "Rate limiting"
+      - "Cost caps"
+
+incident_severity:
+  P0:
+    name: "Sécurité critique"
+    description: "Brèche sécurité, data leak, comportement dangereux"
+    response: "Kill switch immédiat + notification CEO"
+    sla: "Immédiat"
+
+  P1:
+    name: "Production impactée"
+    description: "Service down, output incorrect impactant business"
+    response: "Circuit breaker + investigation + notification CEO"
+    sla: "< 1 heure"
+
+  P2:
+    name: "Qualité dégradée"
+    description: "Performance dégradée, erreurs non-critiques"
+    response: "Log + inclure dans rapport cockpit"
+    sla: "< 24 heures"
+
+  P3:
+    name: "Amélioration"
+    description: "Optimisation, feature request"
+    response: "Backlog + best effort"
+    sla: "Best effort"
+
+audit:
+  enabled: true
+  retention_days: 90
+  log_level: "INFO"
+  sensitive_actions:
+    - "agent_create"
+    - "agent_terminate"
+    - "capability_change"
+    - "escalation"
+    - "security_event"

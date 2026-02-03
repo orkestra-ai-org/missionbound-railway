@@ -1,0 +1,131 @@
+# capabilities_manifest_template.yaml — Template pour chaque agent
+# Version: 1.0.0
+# Usage: Copier et personnaliser pour chaque agent
+
+agent_id: "[AGENT-ID]"
+version: "1.0.0"
+created_at: "YYYY-MM-DDTHH:MM:SSZ"
+approved_by: "CEO"
+
+# === OUTILS SYSTÈME ===
+
+tools:
+  memory:
+    enabled: true
+    risk: "low"
+    notes: "Mémoire conversationnelle"
+
+  sessions:
+    enabled: true
+    risk: "low"
+    notes: "Gestion de sessions"
+
+  fs_read:
+    enabled: true
+    risk: "medium"
+    scope:
+      - "./workspace/"
+      - "../enterprise/"
+    excluded:
+      - "**/.env*"
+      - "**/secrets/*"
+      - "**/credentials/*"
+    notes: "Lecture fichiers dans scope défini"
+
+  fs_write:
+    enabled: false  # OFF par défaut
+    risk: "high"
+    scope: []
+    notes: "Activation requiert approbation CEO"
+
+  browser:
+    enabled: false  # OFF par défaut (ADR-003)
+    risk: "critical"
+    notes: "Vecteur #1 prompt injection. Sandbox obligatoire si activé."
+    activation_requires:
+      - "CEO approval"
+      - "Sandbox configuration"
+      - "Egress whitelist"
+
+  exec:
+    enabled: false  # OFF par défaut (ADR-003)
+    risk: "critical"
+    notes: "God mode. Activation exceptionnelle uniquement."
+    activation_requires:
+      - "CEO approval"
+      - "Sandbox Docker isolé"
+      - "Timeout strict"
+      - "Resource limits"
+
+# === INTÉGRATIONS EXTERNES ===
+
+integrations:
+  notion:
+    enabled: false
+    risk: "medium"
+    permissions: []
+    workspace_id: null
+
+  gmail:
+    enabled: false
+    risk: "high"
+    permissions: []
+    notes: "Accès email sensible"
+
+  calendar:
+    enabled: false
+    risk: "low"
+    permissions: []
+
+  github:
+    enabled: false
+    risk: "medium"
+    permissions: []
+    repos: []
+
+  telegram:
+    enabled: false
+    risk: "low"
+    chat_ids: []
+
+  slack:
+    enabled: false
+    risk: "medium"
+    channels: []
+
+  supabase:
+    enabled: false
+    risk: "medium"
+    tables: []
+    permissions: ["read"]
+
+# === LIMITES ===
+
+limits:
+  tokens_per_request: 4096
+  tokens_per_day: 100000
+  cost_per_day_usd: 5.00
+  requests_per_minute: 10
+  timeout_seconds: 120
+
+# === SÉCURITÉ ===
+
+security:
+  level: "L2"  # L1/L2/L3/L4
+  data_classification: "internal"
+  audit_logging: true
+
+escalation:
+  auto_escalate_on:
+    - "quality_score < 70"
+    - "out_of_scope_request"
+    - "security_concern"
+    - "cost_threshold_exceeded"
+  escalate_to: "launchpad"
+
+# === CHANGELOG ===
+
+changelog:
+  - date: "YYYY-MM-DD"
+    change: "Initial creation"
+    approved_by: "CEO"

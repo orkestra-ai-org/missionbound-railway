@@ -1,0 +1,99 @@
+{
+  "$schema": "../schemas/agent-config.schema.json",
+  "version": "1.0.0",
+
+  "agent": {
+    "id": "[agent-id]",
+    "name": "[Agent Name]",
+    "level": "L1|L2",
+    "supervisor": "launchpad|[parent-agent-id]",
+    "status": "active|paused|terminated"
+  },
+
+  "model": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5-20250929",
+    "temperature": 0.7,
+    "max_tokens": 4096
+  },
+
+  "capabilities": {
+    "tools": {
+      "memory": true,
+      "sessions": true,
+      "fs_read": {
+        "enabled": true,
+        "scope": ["./", "../enterprise/"]
+      },
+      "fs_write": {
+        "enabled": false,
+        "scope": []
+      },
+      "browser": false,
+      "exec": false
+    },
+
+    "integrations": {
+      "notion": {
+        "enabled": false,
+        "workspace_id": null,
+        "permissions": ["read"]
+      },
+      "gmail": {
+        "enabled": false,
+        "permissions": ["read"]
+      },
+      "calendar": {
+        "enabled": false,
+        "permissions": ["read"]
+      },
+      "github": {
+        "enabled": false,
+        "permissions": ["read"]
+      },
+      "telegram": {
+        "enabled": false,
+        "chat_ids": []
+      },
+      "slack": {
+        "enabled": false,
+        "channels": []
+      },
+      "supabase": {
+        "enabled": false,
+        "tables": []
+      }
+    }
+  },
+
+  "security": {
+    "level": "L2",
+    "egress": {
+      "policy": "deny-all",
+      "allowed_domains": []
+    },
+    "data_classification": "internal",
+    "audit_logging": true
+  },
+
+  "limits": {
+    "tokens_per_day": 100000,
+    "cost_per_day_usd": 5.00,
+    "max_retries": 3,
+    "timeout_seconds": 120
+  },
+
+  "evaluation": {
+    "gold_set": "./GOLD_SET.md",
+    "min_score": 70,
+    "auto_run": true,
+    "frequency": "daily"
+  },
+
+  "metadata": {
+    "created_at": "YYYY-MM-DDTHH:MM:SSZ",
+    "created_by": "launchpad",
+    "updated_at": "YYYY-MM-DDTHH:MM:SSZ",
+    "version_history": []
+  }
+}
