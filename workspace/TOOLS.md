@@ -1,145 +1,131 @@
-# TOOLS.md — Configuration des outils Orkestra
+# TOOLS.md — MissionBound Growth Agent v2.0
 
-> Notes sur les outils disponibles et leurs conventions
+> Configuration des outils et policies de sécurité
+> Aligné RBAC L3 | VISION Section 12, 14
 
 ---
 
-## Outils natifs OpenClaw
+## RBAC Level : L3 (Specialist Agent)
+
+Toutes les capabilities ci-dessous sont alignées avec config.json et AGENTS.md.
+
+---
+
+## Outils Natifs OpenClaw
 
 ### Memory
-- **Statut** : ✅ Activé
-- **Usage** : Mémoire persistante via MEMORY.md et memory/
-- **Convention** : Flush avant compaction, read au démarrage
+- **Statut** : ✅ ON
+- **Usage** : MEMORY.md (agent-level, append-only) + memory/ (daily logs)
+- **Sync** : Pre-compaction flush vers orkestra-memory (git push)
+- **Sécurité** : Enterprise memory = read-only (PR-like pipeline pour modifications)
 
 ### Sessions
-- **Statut** : ✅ Activé
-- **Usage** : Gestion des conversations
-- **Convention** : Une session = un contexte isolé
+- **Statut** : ✅ ON
+- **Usage** : Gestion conversations prospects, contexte courant
+- **Retention** : Durée session, compacted par OpenClaw
 
 ### File System (Read)
-- **Statut** : ⚠️ Limité
-- **Scope** : `./` (workspace) + `../enterprise/` (lecture seule)
-- **Convention** : Ne jamais lire hors du scope
+- **Statut** : ✅ ON
+- **Scope** : `./` (workspace), `./skills/`, `./security/`, `./schemas/`
+- **Interdit** : Tout path hors workspace
 
 ### File System (Write)
-- **Statut** : ❌ OFF par défaut
-- **Exception** : `memory/` autorisé
-- **Convention** : Toute écriture = trace dans les logs
+- **Statut** : ⚠️ ON (limité)
+- **Scope** : `./memory/` uniquement (append-only)
+- **Interdit** : Tout autre path, y compris SOUL.md, AGENTS.md, skills/
+- **Rationale** : L'agent écrit ses learnings, pas sa configuration
 
 ### Browser
-- **Statut** : ❌ OFF
-- **Raison** : Risque de prompt injection
-- **Alternative** : Demander à JC si besoin
+- **Statut** : ✅ ON
+- **Usage** : LinkedIn scraping (profils, posts), Twitter (monitoring)
+- **Limites** : < 20 connexions LinkedIn/jour, respecter rate limits
+- **Sécurité** : Validation CEO requise pour tout login (formulaire, OAuth)
+- **Rationale VISION** : browser ON justifié car L3 avec gates explicites
 
 ### Exec
 - **Statut** : ❌ OFF
-- **Raison** : Risque d'escalade de privilèges
-- **Alternative** : Jamais, sauf cas exceptionnel validé par JC
+- **Rationale** : Risque critique (VISION 12.2). Aucun cas d'usage growth ne nécessite shell access.
+
+### Web Search
+- **Statut** : ✅ ON
+- **Provider** : Brave Search API
+- **Usage** : Recherche concurrentielle, trends, profils
+- **Autonome** : Oui (pas de validation requise)
+
+### Web Fetch
+- **Statut** : ✅ ON
+- **Usage** : Extraction contenu pages web, APIs publiques
+- **Autonome** : Oui
+- **DLP** : Patterns sensibles redactés (api_key, token, password, secret)
+
+### Cron
+- **Statut** : ✅ ON
+- **Usage** : Heartbeat agent (30min), workflows schedulés
+- **Jobs** : W1 (4h), W2 (2h), W6 (weekly)
+
+### Message
+- **Statut** : ✅ ON
+- **Canaux** : Telegram (bot MissionBound), Slack (#missionbound)
+- **Usage** : Reports CEO, alertes budget, escalations
+- **Sécurité** : Canaux dédiés uniquement, pas de DM externe sans gate
 
 ---
 
-## Intégrations externes
+## Intégrations Externes
 
-### Telegram (natif OpenClaw)
-- **Statut** : ✅ Activé
-- **Config** : DM avec JC uniquement
-- **Usage** : Communication principale + alertes
-- **Commandes** : /status, /budget, /agents, etc.
+### Notion
+- **Statut** : ✅ ON
+- **Scope** : Read/Write Orkestra Team + MissionBound databases
+- **Token** : Via env `NOTION_TOKEN`
+- **Rate limit** : 3 req/sec (Notion limit)
+- **Usage** : CRM pipeline, dashboard, métriques, reports
 
-### GitHub (via skill auto-improve)
-- **Statut** : 🔨 À configurer
-- **Permissions** : Read always, Write via PR only
-- **Usage** : Auto-amélioration, versionning
-- **Convention** : Une branche par amélioration
+### GitHub
+- **Statut** : ✅ ON
+- **Scope** : PRs via orkestra-github skill, lecture repos publics
+- **Token** : Via env `GITHUB_TOKEN`
+- **Sécurité** : Merge PR = gate CEO. Jamais de commit direct.
 
-### Notion (futur)
-- **Statut** : ⏳ Planifié
-- **Permissions** : Read-only
-- **Usage** : Sync mémoire entreprise
+### Telegram
+- **Statut** : ✅ ON
+- **Bot** : Dédié MissionBound
+- **Token** : Via env `TELEGRAM_BOT_TOKEN`
+- **Usage** : Reports, alertes P0-P1, escalations urgentes
 
-### Gmail (futur)
-- **Statut** : ⏳ Planifié
-- **Permissions** : Read-only
-- **Usage** : Monitoring inbox, alertes
+### Slack
+- **Statut** : ✅ ON
+- **Canal** : #missionbound
+- **Token** : Via env `SLACK_TOKEN`
+- **Usage** : Communication async, alertes P2-P3
 
----
+### OpenRouter
+- **Statut** : ✅ ON
+- **Budget** : 5€/jour max (via config.json)
+- **Models** : Kimi K2.5 (default), Opus 4 (strategy), Deepseek V3 (browsing)
+- **Token** : Via env `OPENROUTER_API_KEY`
 
-## Skills personnalisés
-
-### skill-self-improve
-- **But** : Permettre l'auto-amélioration contrôlée
-- **Fonctions** :
-  - Proposer des modifications
-  - Créer des branches
-  - Soumettre des PRs
-  - Rollback si régression
-- **Garde-fous** : Max 5 commits/jour, fichiers protégés
-
-### skill-agent-factory
-- **But** : Créer de nouveaux agents OpenClaw
-- **Fonctions** :
-  - Générer workspace complet
-  - Configurer capabilities
-  - Exécuter gold set initial
-  - Déployer sur Railway
-- **Validation** : JC doit approuver avant déploiement
+### Railway
+- **Statut** : ✅ Hébergement
+- **Port** : 8080
+- **Volume** : /data (mémoire persistante)
+- **Resources** : 1x CPU, 512MB RAM
 
 ---
 
-## Conventions de nommage
+## Egress Policy (Résumé)
 
-### Fichiers
-- `UPPERCASE.md` : Fichiers système (SOUL, AGENTS, etc.)
-- `lowercase.md` : Fichiers de travail
-- `YYYY-MM-DD.md` : Logs quotidiens
+Détail complet dans `security/egress_policy.yaml`.
 
-### Branches Git
-- `improve/description-courte` : Auto-amélioration
-- `agent/nom-agent` : Création d'agent
-- `fix/description` : Corrections
-
-### Commits
-```
-[type] description courte
-
-Corps si nécessaire
-
-Signed-off-by: Orkestra <orkestra@orkestra.ai>
-```
-
-Types : `feat`, `fix`, `docs`, `refactor`, `test`, `chore`
+| Domaine | Méthodes | Usage |
+|---------|----------|-------|
+| api.notion.com | GET, POST, PATCH | CRM, dashboard |
+| api.github.com | GET, POST | PRs, lecture repos |
+| api.telegram.org | GET, POST | Notifications |
+| api.openrouter.ai | POST | Model routing |
+| reddit.com, oauth.reddit.com | GET, POST | Engagement Reddit |
+| news.ycombinator.com, hn.algolia.com | GET | Monitoring HN |
+| **Tout le reste** | **DENY** | Egress policy whitelist |
 
 ---
 
-## Limites et quotas
-
-| Ressource | Limite |
-|-----------|--------|
-| Tokens/jour | ~500K (selon budget) |
-| Commits auto/jour | 5 max |
-| Lignes modifiées/commit | 50 max |
-| Sessions concurrentes | 1 |
-| Memory file size | < 5KB |
-
----
-
-## Troubleshooting
-
-### Si Telegram ne répond pas
-1. Vérifier le token bot
-2. Vérifier l'autorisation DM
-3. Vérifier les logs gateway
-
-### Si budget dépassé
-1. Pause automatique
-2. Alerte JC
-3. Attendre validation pour continuer
-
-### Si memory corrompue
-1. Ne pas paniquer
-2. Lire les backups dans memory/
-3. Restaurer depuis git si nécessaire
-
----
-
-*Ces outils sont mes mains. Je les utilise avec précaution et intention.*
+*TOOLS.md v2.0 | MissionBound Growth | RBAC L3 | 2026-02-07*
