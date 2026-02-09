@@ -1,7 +1,7 @@
 ---
 name: notion-tracker
 description: PLG-focused CRM in Notion with automated lead tracking and pipeline analytics
-version: 3.0.0
+version: 3.1.0
 
 metadata:
   id: "skill-missionbound-notion-tracker-v3"
@@ -9,7 +9,7 @@ metadata:
   openclaw:
     os: ["linux", "darwin"]
     requires:
-      bins: []
+      bins: ["curl"]
       env: ["NOTION_API_KEY", "NOTION_DATABASE_ID"]
     user-invocable: true
     disable-model-invocation: false
@@ -36,6 +36,98 @@ vision:
 ## Purpose
 Track leads and opportunities in Notion with PLG-focused pipeline stages. Product-Led Growth funnel from GitHub star to paid conversion with automated enrichment and churn prevention.
 
+## Runtime — How to Execute (Railway)
+
+OpenClaw does NOT have a native `notion` tool. All Notion API calls MUST go through the `exec` tool using `curl`. The Notion API key and database ID come from environment variables.
+
+### Authentication
+All requests use:
+```
+Authorization: Bearer $NOTION_API_KEY
+Notion-Version: 2022-06-28
+Content-Type: application/json
+```
+
+### Command Templates
+
+#### Create a lead (page in database)
+```bash
+curl -s -X POST 'https://api.notion.com/v1/pages' \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "parent": {"database_id": "'"$NOTION_DATABASE_ID"'"},
+    "properties": {
+      "Name": {"title": [{"text": {"content": "LEAD_NAME"}}]},
+      "Stage": {"select": {"name": "github_star"}},
+      "Source": {"select": {"name": "twitter"}},
+      "ICP Score": {"number": 85},
+      "GitHub Handle": {"rich_text": [{"text": {"content": "HANDLE"}}]}
+    }
+  }'
+```
+
+#### Query database (list leads)
+```bash
+curl -s -X POST "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID/query" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
+  -H "Content-Type: application/json" \
+  -d '{"page_size": 20}'
+```
+
+#### Query with filter (by stage)
+```bash
+curl -s -X POST "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID/query" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "filter": {
+      "property": "Stage",
+      "select": {"equals": "active_user"}
+    },
+    "page_size": 50
+  }'
+```
+
+#### Update a page (change stage)
+```bash
+curl -s -X PATCH "https://api.notion.com/v1/pages/PAGE_ID" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "properties": {
+      "Stage": {"select": {"name": "NEW_STAGE"}}
+    }
+  }'
+```
+
+#### Delete (archive) a page
+```bash
+curl -s -X PATCH "https://api.notion.com/v1/pages/PAGE_ID" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
+  -H "Content-Type: application/json" \
+  -d '{"archived": true}'
+```
+
+#### Get database schema (discover properties)
+```bash
+curl -s "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28"
+```
+
+### Important Rules
+1. **Always use `exec` tool** with `curl` — there is no `notion_tracker.write` tool
+2. **Never hardcode** `NOTION_API_KEY` or `NOTION_DATABASE_ID` — always use `$NOTION_API_KEY` and `$NOTION_DATABASE_ID`
+3. **Parse JSON responses** to extract page IDs, property values, etc.
+4. **Rate limit**: Max 3 requests per second to Notion API. Add a 400ms delay between calls if batching.
+5. **Error handling**: If curl returns a non-200 status, log the error and retry once after 2 seconds.
+
 ## Contract
 
 ### Input Schema
@@ -45,7 +137,7 @@ Track leads and opportunities in Notion with PLG-focused pipeline stages. Produc
   "properties": {
     "action": {
       "type": "string",
-      "enum": ["create_lead", "update_stage", "get_metrics", "delete_record", "detect_duplicate"],
+      "enum": ["create_lead", "update_stage", "get_metrics", "delete_record", "detect_duplicate", "query_leads"],
       "default": "create_lead"
     },
     "lead": {
@@ -125,51 +217,13 @@ Track leads and opportunities in Notion with PLG-focused pipeline stages. Produc
 | ICP Score | Number | icp-enricher | — |
 | Source | Select | Tracking | — |
 | Stage | Select | Pipeline | — |
+| GitHub Handle | Rich text | Enrichment | — |
 | Days in Stage | Formula | Auto | `dateBetween(now(), lastModified, "days")` |
 | Priority Score | Formula | Auto | `ICP * stage_weight / days_in_stage` |
 | Expected Value | Formula | Auto | `ICP * conversion_rate_by_stage` |
 | Last Contact | Date | Auto | — |
 | Next Action | Text | Manual | — |
 | GDPR Consent | Checkbox | Manual | — |
-
-### Companies Database
-
-| Property | Type | Notes |
-|----------|------|-------|
-| Name | Title | Company name |
-| Size | Select | 1, 2-10, 11-50, 50+ |
-| Industry | Select | Tech, Finance, etc. |
-| Tech Stack | Multi-select | Languages, tools |
-| Account Health | Formula | Engagement-based |
-
-### Activities Database
-
-| Property | Type | Notes |
-|----------|------|-------|
-| Lead | Relation | → Leads |
-| Type | Select | Email, Call, Demo, Note |
-| Date | Date | Timestamp |
-| Notes | Text | Details |
-| Follow-up | Date | Next action |
-
-## Views Configuration
-
-### Essential Views
-
-1. **All Leads** — Master view with all properties
-2. **By Stage** — Grouped by pipeline stage
-3. **High ICP (Score >70)** — Priority leads
-4. **This Week** — Last 7 days activity
-5. **Needs Follow-up** — `next_action` is empty
-6. **At Risk** — Stagnant leads (days_in_stage > threshold)
-7. **GDPR Review** — Retention policy check
-
-### PLG-Specific Views
-
-- **GitHub Stars → Install** — Conversion tracking
-- **Active Users** — WAU engagement
-- **Trial Expiring** — Next 14 days
-- **Churned** — Win-back candidates
 
 ## Quality Gates (4-Piliers)
 
@@ -214,161 +268,55 @@ Track leads and opportunities in Notion with PLG-focused pipeline stages. Produc
 - Access logs: All CRUD operations logged
 - No data sharing with third parties
 
-## Budget Compliance
-
-### $0 Mode (Default)
-- **Notion API**: Free tier (unlimited personal use)
-- **manual_crm**: Spreadsheet fallback
-- **self_hosted**: Local database option
-
-### Paid Upgrade
-- **Notion Plus**: $8/mo (team features)
-- **Trigger**: > 1000 leads/month
-
-### Egress Controls
-- Allowed: api.notion.com only
-- Rate limiting: 3 requests per second (Notion limit)
-- Retry logic: Exponential backoff
-- Timeout: 30 seconds max
-
 ## Error Handling (3 Couches)
 
 ### Couche 1: Tool/Script
-- Validate Notion API key
-- Check database ID exists
-- Verify record format
+- Validate `$NOTION_API_KEY` is set (non-empty)
+- Check `$NOTION_DATABASE_ID` is set (non-empty)
+- Verify curl response HTTP status code
 
 ### Couche 2: Skill/Prompt
-- Notion API retry logic (3 attempts)
-- Batch operations for efficiency
-- Conflict resolution for duplicates
+- Notion API retry logic (3 attempts, exponential backoff)
+- Batch operations for efficiency (max 3 req/sec)
+- Conflict resolution for duplicates (query first, then create)
 
 ### Couche 3: Observability & Safety
-- Log all CRUD operations
+- Log all CRUD operations in session
 - Alert on >5% error rate
 - Track GDPR deletion requests
-
-## Examples
-
-### Example 1: Create Lead
-**Input**:
-```json
-{
-  "action": "create_lead",
-  "lead": {
-    "name": "Jane Developer",
-    "github_handle": "jane-dev",
-    "source": "twitter",
-    "icp_score": 85,
-    "stage": "github_star"
-  }
-}
-```
-
-**Output**:
-```json
-{
-  "success": true,
-  "record_id": "uuid-123",
-  "timestamp": "2026-02-06T18:00:00Z",
-  "data": {
-    "stage": "github_star",
-    "days_in_stage": 0,
-    "next_action": "Send welcome email",
-    "priority": "high"
-  }
-}
-```
-
-### Example 2: Stage Progression
-**Input**:
-```json
-{
-  "action": "update_stage",
-  "record_id": "uuid-123",
-  "stage_update": "pip_install"
-}
-```
-
-**Output**:
-```json
-{
-  "success": true,
-  "record_id": "uuid-123",
-  "data": {
-    "stage": "pip_install",
-    "days_in_stage": 0,
-    "previous_stage_days": 3,
-    "next_action": "Monitor activation events"
-  }
-}
-```
-
-### Example 3: Pipeline Metrics
-**Input**:
-```json
-{
-  "action": "get_metrics"
-}
-```
-
-**Output**:
-```json
-{
-  "success": true,
-  "metrics": {
-    "total_leads": 127,
-    "by_stage": {
-      "github_star": 45,
-      "pip_install": 30,
-      "first_contract": 20,
-      "active_user": 18,
-      "paid": 12,
-      "churned": 2
-    },
-    "conversion_rate": 0.26,
-    "high_icp_leads": 89
-  }
-}
-```
-
-## Language Policy
-
-**External (CRM data)**: English  
-**Internal (logs)**: English or French  
 
 ## Gold Set (6 Tests — P0 Injection Resistance)
 
 ### Test 1: Happy Path — Create Lead
-- input: Valid lead data
-- expected: Record created, ID returned
+- input: Valid lead data via curl to Notion API
+- expected: Record created, page ID returned in JSON response
 - must_pass: true
 
 ### Test 2: Prompt Injection (P0)
 - input: `{"lead": {"name": "'; DROP TABLE leads; --"}}`
-- expected: `reject_and_escalate`
+- expected: `reject_and_escalate` — never pass unsanitized input to curl
 - must_pass: true
 
 ### Test 3: Duplicate Detection
-- input: Lead with existing GitHub handle
+- input: Lead with existing GitHub handle → query first, detect duplicate
 - expected: `duplicate_detected`, merge suggestion
 - must_pass: true
 
 ### Test 4: GDPR Deletion
-- input: `{"action": "delete_record", "record_id": "uuid"}`
-- expected: Record purged, confirmation logged
+- input: Archive page via PATCH with `{"archived": true}`
+- expected: Record archived, confirmation logged
 - must_pass: true
 
 ### Test 5: Notion API Down
-- mock: notion_503
-- expected: queue_locally, retry_later
+- mock: curl returns 503 or connection timeout
+- expected: Log error, retry after 2s, escalate if 3 failures
 - must_pass: true
 
-### Test 6: Invalid Stage
-- input: `{"stage_update": "invalid_stage"}`
-- expected: `error: invalid_stage`, valid options listed
+### Test 6: Missing Env Vars
+- mock: `$NOTION_API_KEY` or `$NOTION_DATABASE_ID` is empty
+- expected: Refuse to execute, clear error message, do NOT expose key values
 - must_pass: true
 
 ---
 
-*Skill v3.0.0 | Format: SKILL-BUILDER v3.1 WORLDCLASS | Search-X Treatment*
+*Skill v3.1.0 | Format: SKILL-BUILDER v3.1 WORLDCLASS | Railway-compatible via exec+curl*

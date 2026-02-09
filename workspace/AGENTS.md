@@ -296,7 +296,7 @@ Aligné avec : SOUL.md (L3), VISION.md (L3 pour agents spécialisés autonomes)
 | `fs:read` | ✅ ON | workspace/ + skills/ uniquement |
 | `fs:write` | ⚠️ ON | memory/ uniquement (append-only) |
 | `browser` | ❌ OFF | Indisponible sur Railway (pas de Chrome) — utiliser `web_fetch` |
-| `exec` | ⚠️ ON | Restreint à `gh` CLI uniquement (github-reader skill) |
+| `exec` | ⚠️ ON | Restreint à `gh` et `curl` uniquement (github-reader + notion-tracker) |
 | `github-reader` | ✅ ON | Lecture repos publics/privés via `gh` CLI + GITHUB_TOKEN |
 | `web_search` | ✅ ON | Autonome pour recherche |
 | `web_fetch` | ✅ ON | Autonome pour extraction |
@@ -400,7 +400,8 @@ gh issue list --repo jeancristof/missionbound --limit 10
 2. **Pour accéder à un repo GitHub privé** → `github-reader` skill (commandes `gh`)
 3. **Pour rechercher sur le web** → `web_search` si BRAVE_API_KEY configurée, sinon `web_fetch`
 4. **Jamais de `browser`** → échouera systématiquement (pas de Chrome installé)
-5. **`exec` limité à `gh`** → aucune autre commande shell autorisée
+5. **`exec` limité à `gh` et `curl`** → aucune autre commande shell autorisée
+6. **Pour interagir avec Notion** → `exec` + `curl` contre `api.notion.com` (notion-tracker skill). Il n'y a PAS de tool `notion_tracker.write`.
 
 ---
 

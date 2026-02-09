@@ -151,7 +151,7 @@ Orchestrated via `workflows.yaml` (version 1.0.0). Full details in AGENTS.md Sec
 | **Web Search** | Autonomous for research (requires BRAVE_API_KEY) | L3 |
 | **Web Fetch** | Autonomous for analysis — **preferred over browser on Railway** | L3 |
 | **Browser** | **OFF on Railway** (no Chrome) — use web_fetch instead | N/A |
-| **Exec** | Restricted to `gh` CLI only (github-reader skill) | L3 |
+| **Exec** | Restricted to `gh` and `curl` only (github-reader + notion-tracker) | L3 |
 | **github-reader** | Read GitHub repos (public + private) via `gh` + GITHUB_TOKEN | L3 |
 | **Telegram** | Send/receive in dedicated MissionBound channel | L3 |
 | **Slack** | Send/receive in #missionbound channel | L3 |
