@@ -102,16 +102,39 @@ async function startGateway() {
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 
-  // Copy MissionBound workspace files from image to volume (if not already present)
+  // Sync MissionBound workspace files from image to volume.
+  // Always overwrite .md files to ensure latest personality is loaded.
+  // Also remove stale files from volume that are no longer in the image.
   const imageWorkspaceDir = "/root/.openclaw/workspace";
   if (fs.existsSync(imageWorkspaceDir)) {
-    const files = fs.readdirSync(imageWorkspaceDir);
-    for (const file of files) {
+    const imageFiles = new Set(fs.readdirSync(imageWorkspaceDir));
+    // Copy/overwrite all files from image to volume
+    for (const file of imageFiles) {
       const srcPath = path.join(imageWorkspaceDir, file);
       const destPath = path.join(WORKSPACE_DIR, file);
-      if (!fs.existsSync(destPath)) {
+      const isDir = fs.statSync(srcPath).isDirectory();
+      if (isDir) {
+        // For directories (skills/, memory/), copy if not present
+        if (!fs.existsSync(destPath)) {
+          fs.cpSync(srcPath, destPath, { recursive: true });
+          console.log(`[setup] Copied directory ${file} to workspace`);
+        }
+      } else {
+        // For files (.md, .json), always overwrite to pick up changes
         fs.cpSync(srcPath, destPath, { recursive: true });
-        console.log(`[setup] Copied ${file} to workspace`);
+        console.log(`[setup] Synced ${file} to workspace`);
+      }
+    }
+    // Remove stale .md files from volume that are no longer in the image
+    // (e.g., IDENTITY.md, DEPLOY.md removed to fix personality conflict)
+    const volumeFiles = fs.readdirSync(WORKSPACE_DIR);
+    for (const file of volumeFiles) {
+      if (file.endsWith(".md") && !imageFiles.has(file)) {
+        const stalePath = path.join(WORKSPACE_DIR, file);
+        if (fs.statSync(stalePath).isFile()) {
+          fs.rmSync(stalePath);
+          console.log(`[setup] Removed stale file ${file} from workspace`);
+        }
       }
     }
   }
@@ -627,6 +650,16 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
         clawArgs(["config", "set", "gateway.controlUi.allowInsecureAuth", "true"]),
       );
 
+      // === MissionBound: Ensure bootstrap loads full workspace files ===
+      await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agent.bootstrapMaxChars", "50000"]));
+      await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agent.skipBootstrap", "false"]));
+      console.log("[onboard] ✓ Bootstrap configured: maxChars=50000, skipBootstrap=false");
+
+      // === MissionBound: Enable session persistence and memory ===
+      await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.sessions", "true"]));
+      await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.memory", "true"]));
+      console.log("[onboard] ✓ Tools configured: sessions=true, memory=true");
+
       const channelsHelp = await runCmd(
         OPENCLAW_NODE,
         clawArgs(["channels", "add", "--help"]),
@@ -641,14 +674,23 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
             "\n[telegram] skipped (this openclaw build does not list telegram in `channels add --help`)\n";
         } else {
           // Avoid `channels add` here (it has proven flaky across builds); write config directly.
+          // MissionBound: Use allowlist instead of pairing (pairing impossible on Railway SSH).
           const token = payload.telegramToken.trim();
+          const telegramOwnerId = process.env.TELEGRAM_OWNER_ID || "";
           const cfgObj = {
             enabled: true,
-            dmPolicy: "pairing",
+            dmPolicy: telegramOwnerId ? "allowlist" : "pairing",
+            allowFrom: telegramOwnerId ? [telegramOwnerId] : [],
             botToken: token,
             groupPolicy: "allowlist",
             streamMode: "partial",
           };
+          if (telegramOwnerId) {
+            console.log(`[telegram] Using allowlist mode with owner ID: ${telegramOwnerId}`);
+          } else {
+            console.log("[telegram] WARNING: TELEGRAM_OWNER_ID not set, falling back to pairing mode");
+            console.log("[telegram] Set TELEGRAM_OWNER_ID in Railway env vars to bypass pairing");
+          }
           const set = await runCmd(
             OPENCLAW_NODE,
             clawArgs([
