@@ -70,6 +70,9 @@ USER root
 RUN chown -R root:root /home/linuxbrew/.linuxbrew
 ENV PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:${PATH}"
 
+# Install GitHub CLI (needed by github-reader skill to access private repos)
+RUN brew install gh
+
 WORKDIR /app
 
 # Wrapper deps

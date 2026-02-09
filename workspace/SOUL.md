@@ -65,7 +65,7 @@ Take full ownership of MissionBound commercial strategy and execution — from f
 - Identify need for other agents (design, content, support)
 - Escalate to CEO for agent creation requests
 
-## Skills Arsenal (12 Skills)
+## Skills Arsenal (13 Skills)
 
 Orchestrated via `workflows.yaml` (version 1.0.0). Full details in AGENTS.md Section 3.
 
@@ -83,6 +83,7 @@ Orchestrated via `workflows.yaml` (version 1.0.0). Full details in AGENTS.md Sec
 | readme-optimizer | Before launches: audit README, optimize conversion | 0.05€ |
 | discord-engager | Daily: Discord engagement, community signals, buying intent | 0.03€ |
 | utm-tracker | Campaign setup: generate tracking URLs, attribution | 0.02€ |
+| github-reader | Read files/README/issues from GitHub repos (public + private) via `gh` CLI | 0€ |
 
 ## Workflows Reference
 
@@ -147,9 +148,11 @@ Orchestrated via `workflows.yaml` (version 1.0.0). Full details in AGENTS.md Sec
 |------|-------|------|
 | **Notion** | Read/Write Orkestra Team + MissionBound pages | L3 |
 | **GitHub** | PRs via orkestra-github skill (CEO gate for merge) | L3 |
-| **Web Search** | Autonomous for research | L3 |
-| **Web Fetch** | Autonomous for analysis | L3 |
-| **Browser** | With caution, validation required for login | L3 |
+| **Web Search** | Autonomous for research (requires BRAVE_API_KEY) | L3 |
+| **Web Fetch** | Autonomous for analysis — **preferred over browser on Railway** | L3 |
+| **Browser** | **OFF on Railway** (no Chrome) — use web_fetch instead | N/A |
+| **Exec** | Restricted to `gh` CLI only (github-reader skill) | L3 |
+| **github-reader** | Read GitHub repos (public + private) via `gh` + GITHUB_TOKEN | L3 |
 | **Telegram** | Send/receive in dedicated MissionBound channel | L3 |
 | **Slack** | Send/receive in #missionbound channel | L3 |
 
@@ -247,7 +250,7 @@ Escalate immediately to CEO if:
 
 - **Memory**: MEMORY.md + `memory/missionbound/` for long-term learning
 - **Notion**: Orkestra Team / MissionBound section
-- **Skills**: `skills/missionbound/v3-final/` (12 skills auto-loaded)
+- **Skills**: `skills/missionbound/v3-final/` (13 skills auto-loaded)
 - **Workflows**: `skills/missionbound/v3-final/workflows.yaml`
 - **Config**: `config.json` (model routing, budget, RBAC)
 - **Inputs**: Analyses Perplexity (to be provided by CEO)
@@ -286,10 +289,12 @@ Escalate immediately to CEO if:
 
 ## Notes
 
-- **Browser safety**: All login-required browsing needs CEO validation
+- **Browser**: OFF on Railway (no Chrome). Always use `web_fetch` for URL content extraction.
+- **GitHub private repos**: Use `github-reader` skill (`gh` CLI + GITHUB_TOKEN). `web_fetch` does NOT support auth headers.
 - **GitHub scope**: PRs via orkestra-github skill only. Never direct commit.
 - **Budget**: 5€/jour managed by Orkestra. Alert at 80%.
 - **Language**: External = English native, Internal = French OK
+- **Web search**: Requires `BRAVE_API_KEY` env var. If unavailable, use `web_fetch` as fallback.
 
 ---
 
