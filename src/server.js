@@ -102,6 +102,20 @@ async function startGateway() {
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 
+  // Copy MissionBound workspace files from image to volume (if not already present)
+  const imageWorkspaceDir = "/root/.openclaw/workspace";
+  if (fs.existsSync(imageWorkspaceDir)) {
+    const files = fs.readdirSync(imageWorkspaceDir);
+    for (const file of files) {
+      const srcPath = path.join(imageWorkspaceDir, file);
+      const destPath = path.join(WORKSPACE_DIR, file);
+      if (!fs.existsSync(destPath)) {
+        fs.cpSync(srcPath, destPath, { recursive: true });
+        console.log(`[setup] Copied ${file} to workspace`);
+      }
+    }
+  }
+
   // Sync wrapper token to openclaw.json before every gateway start.
   // This ensures the gateway's config-file token matches what the wrapper injects via proxy.
   console.log(`[gateway] ========== GATEWAY START TOKEN SYNC ==========`);
