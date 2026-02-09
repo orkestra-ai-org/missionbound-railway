@@ -303,7 +303,18 @@ Aligné avec : SOUL.md (L3), VISION.md (L3 pour agents spécialisés autonomes)
 | `cron` | ✅ ON | Heartbeat 30min |
 | `message` | ✅ ON | Telegram/Slack (canaux dédiés) |
 | `github` | ✅ ON | PRs via orkestra-github (gate CEO) |
-| `notion` | ✅ ON | Read/Write Orkestra Team + MissionBound |
+
+> **⚠️ NOTION — PAS DE TOOL NATIF**
+> Il n'existe PAS de tool `notion`, `notion.write`, `notion.add`, ou `notion_tracker.write` dans OpenClaw.
+> Pour TOUTE opération Notion (créer, lire, modifier, archiver), tu DOIS utiliser le tool **`exec`** avec **`curl`** :
+> ```
+> exec: curl -s -X POST 'https://api.notion.com/v1/pages' \
+>   -H "Authorization: Bearer $NOTION_API_KEY" \
+>   -H "Notion-Version: 2022-06-28" \
+>   -H "Content-Type: application/json" \
+>   -d '{"parent":{"database_id":"'"$NOTION_DATABASE_ID"'"}, "properties":{...}}'
+> ```
+> Voir la skill `notion-tracker` (SKILL.md) pour tous les templates de commandes curl.
 
 ---
 
@@ -395,13 +406,40 @@ gh api repos/jeancristof/missionbound/contents/src --jq '.[].name'
 gh issue list --repo jeancristof/missionbound --limit 10
 ```
 
+### Accès Notion (CRM, Pipeline, Tracking)
+Il n'existe **PAS** de tool natif `notion`, `notion.write`, `notion.add`, ou `notion_tracker.write` dans OpenClaw.
+Toutes les opérations Notion passent par **`exec`** + **`curl`** contre `api.notion.com`.
+
+```
+# Créer un lead
+exec: curl -s -X POST 'https://api.notion.com/v1/pages' \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
+  -H "Content-Type: application/json" \
+  -d '{"parent":{"database_id":"'"$NOTION_DATABASE_ID"'"}, "properties":{"Name":{"title":[{"text":{"content":"Lead Name"}}]}, "Stage":{"select":{"name":"github_star"}}}}'
+
+# Lister les leads
+exec: curl -s -X POST "https://api.notion.com/v1/databases/$NOTION_DATABASE_ID/query" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
+  -H "Content-Type: application/json" \
+  -d '{"page_size": 20}'
+
+# Modifier un lead (changer de stage)
+exec: curl -s -X PATCH "https://api.notion.com/v1/pages/PAGE_ID" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
+  -H "Content-Type: application/json" \
+  -d '{"properties":{"Stage":{"select":{"name":"active_user"}}}}'
+```
+
 ### Règles Impératives Railway
 1. **Pour lire du contenu web** → `web_fetch` (pas `browser`)
-2. **Pour accéder à un repo GitHub privé** → `github-reader` skill (commandes `gh`)
+2. **Pour accéder à un repo GitHub privé** → `github-reader` skill (commandes `gh` via `exec`)
 3. **Pour rechercher sur le web** → `web_search` si BRAVE_API_KEY configurée, sinon `web_fetch`
 4. **Jamais de `browser`** → échouera systématiquement (pas de Chrome installé)
 5. **`exec` limité à `gh` et `curl`** → aucune autre commande shell autorisée
-6. **Pour interagir avec Notion** → `exec` + `curl` contre `api.notion.com` (notion-tracker skill). Il n'y a PAS de tool `notion_tracker.write`.
+6. **Pour TOUTE opération Notion** → `exec` + `curl` contre `api.notion.com`. **NE JAMAIS appeler `notion`, `notion.write`, `notion.add`, ou `notion_tracker.write`** — ces tools N'EXISTENT PAS.
 
 ---
 
