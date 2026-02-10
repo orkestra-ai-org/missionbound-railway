@@ -296,14 +296,14 @@ Aligné avec : SOUL.md (L3), VISION.md (L3 pour agents spécialisés autonomes)
 | `fs:read` | ✅ ON | workspace/ + skills/ uniquement |
 | `fs:write` | ⚠️ ON | memory/ uniquement (append-only) |
 | `browser` | ❌ OFF | Indisponible sur Railway (pas de Chrome) — utiliser `web_fetch` |
-| `exec` | ⚠️ ON | Restreint à `gh` et `curl` uniquement |
+| `exec` | ⚠️ ON | Restreint à `gh` CLI uniquement (github-reader skill) |
 | `github-reader` | ✅ ON | Lecture repos publics/privés via `gh` CLI + GITHUB_TOKEN |
 | `web_search` | ✅ ON | Autonome pour recherche |
 | `web_fetch` | ✅ ON | Autonome pour extraction |
 | `cron` | ✅ ON | Heartbeat 30min |
 | `message` | ✅ ON | Telegram/Slack (canaux dédiés) |
 | `github` | ✅ ON | PRs via orkestra-github (gate CEO) |
-| `notion` | ⚠️ VIA EXEC | Read/Write via `exec` + `curl` (PAS de tool native) |
+| `notion` | ✅ ON | Read/Write Orkestra Team + MissionBound |
 
 ---
 
@@ -395,52 +395,12 @@ gh api repos/jeancristof/missionbound/contents/src --jq '.[].name'
 gh issue list --repo jeancristof/missionbound --limit 10
 ```
 
-### Accès Notion — Via `exec` + `curl` (IMPORTANT)
-
-> **OpenClaw n'a PAS de tool `notion` native.** Toute interaction Notion DOIT passer par `exec` + `curl` contre l'API Notion REST.
-> Si tu tentes `notion.write`, `notion.add`, ou tout appel direct à un outil "notion" → ça échouera silencieusement.
-
-**Configuration requise** : Variable d'environnement `NOTION_API_KEY` (intégration interne Orkestra)
-
-**Exemples de commandes** :
-
-```bash
-# Lire une page Notion
-curl -s -X GET "https://api.notion.com/v1/pages/{page_id}" \
-  -H "Authorization: Bearer $NOTION_API_KEY" \
-  -H "Notion-Version: 2022-06-28"
-
-# Requêter une base de données (pipeline CRM)
-curl -s -X POST "https://api.notion.com/v1/databases/{db_id}/query" \
-  -H "Authorization: Bearer $NOTION_API_KEY" \
-  -H "Notion-Version: 2022-06-28" \
-  -H "Content-Type: application/json" \
-  -d '{"page_size": 100}'
-
-# Ajouter un lead au pipeline
-curl -s -X POST "https://api.notion.com/v1/pages" \
-  -H "Authorization: Bearer $NOTION_API_KEY" \
-  -H "Notion-Version: 2022-06-28" \
-  -H "Content-Type: application/json" \
-  -d '{"parent":{"database_id":"DB_ID"},"properties":{...}}'
-
-# Mettre à jour un lead existant
-curl -s -X PATCH "https://api.notion.com/v1/pages/{page_id}" \
-  -H "Authorization: Bearer $NOTION_API_KEY" \
-  -H "Notion-Version: 2022-06-28" \
-  -H "Content-Type: application/json" \
-  -d '{"properties":{...}}'
-```
-
-**Règle** : Toujours utiliser `exec` avec `curl` pour Notion. Jamais d'appel direct à un tool "notion".
-
 ### Règles Impératives Railway
 1. **Pour lire du contenu web** → `web_fetch` (pas `browser`)
 2. **Pour accéder à un repo GitHub privé** → `github-reader` skill (commandes `gh`)
 3. **Pour rechercher sur le web** → `web_search` si BRAVE_API_KEY configurée, sinon `web_fetch`
 4. **Jamais de `browser`** → échouera systématiquement (pas de Chrome installé)
-5. **`exec` limité à `gh` et `curl`** → aucune autre commande shell autorisée
-6. **Pour Notion** → `exec` + `curl` uniquement (pas de tool native)
+5. **`exec` limité à `gh`** → aucune autre commande shell autorisée
 
 ---
 

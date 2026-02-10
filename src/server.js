@@ -103,49 +103,37 @@ async function startGateway() {
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 
   // Sync MissionBound workspace files from image to volume.
-  // Recursive sync: overwrites ALL files EXCEPT memory/ (agent-generated).
-  // This ensures skill updates and bootstrap file changes deploy on every redeploy.
+  // Always overwrite .md files to ensure latest personality is loaded.
+  // Also remove stale files from volume that are no longer in the image.
   const imageWorkspaceDir = "/root/.openclaw/workspace";
   if (fs.existsSync(imageWorkspaceDir)) {
-    function syncDir(src, dest, relPath) {
-      fs.mkdirSync(dest, { recursive: true });
-      const entries = fs.readdirSync(src, { withFileTypes: true });
-      for (const entry of entries) {
-        const srcPath = path.join(src, entry.name);
-        const destPath = path.join(dest, entry.name);
-        const entryRelPath = relPath ? `${relPath}/${entry.name}` : entry.name;
-        // Skip memory/ directory — agent-generated, must persist across redeploys
-        if (entry.name === "memory" && entry.isDirectory() && !relPath) {
-          console.log(`[sync] Skipped memory/ (agent-generated, preserved)`);
-          continue;
+    const imageFiles = new Set(fs.readdirSync(imageWorkspaceDir));
+    // Copy/overwrite all files from image to volume
+    for (const file of imageFiles) {
+      const srcPath = path.join(imageWorkspaceDir, file);
+      const destPath = path.join(WORKSPACE_DIR, file);
+      const isDir = fs.statSync(srcPath).isDirectory();
+      if (isDir) {
+        // For directories (skills/, memory/), copy if not present
+        if (!fs.existsSync(destPath)) {
+          fs.cpSync(srcPath, destPath, { recursive: true });
+          console.log(`[setup] Copied directory ${file} to workspace`);
         }
-        if (entry.isDirectory()) {
-          syncDir(srcPath, destPath, entryRelPath);
-        } else {
-          // Skip MEMORY.md at workspace root — agent-generated
-          if (entry.name === "MEMORY.md" && !relPath) {
-            if (fs.existsSync(destPath)) {
-              console.log(`[sync] Skipped MEMORY.md (agent-generated, preserved)`);
-              continue;
-            }
-            // First deploy: copy initial MEMORY.md
-          }
-          fs.cpSync(srcPath, destPath);
-          console.log(`[sync] Synced ${entryRelPath}`);
-        }
+      } else {
+        // For files (.md, .json), always overwrite to pick up changes
+        fs.cpSync(srcPath, destPath, { recursive: true });
+        console.log(`[setup] Synced ${file} to workspace`);
       }
     }
-    syncDir(imageWorkspaceDir, WORKSPACE_DIR, "");
-
-    // Remove stale .md files from volume root that are no longer in the image
-    const imageFiles = new Set(fs.readdirSync(imageWorkspaceDir));
+    // Remove stale .md files from volume that are no longer in the image
+    // (e.g., IDENTITY.md, DEPLOY.md removed to fix personality conflict)
     const volumeFiles = fs.readdirSync(WORKSPACE_DIR);
     for (const file of volumeFiles) {
-      if (file.endsWith(".md") && !imageFiles.has(file) && file !== "MEMORY.md") {
+      if (file.endsWith(".md") && !imageFiles.has(file)) {
         const stalePath = path.join(WORKSPACE_DIR, file);
         if (fs.statSync(stalePath).isFile()) {
           fs.rmSync(stalePath);
-          console.log(`[sync] Removed stale file ${file} from workspace`);
+          console.log(`[setup] Removed stale file ${file} from workspace`);
         }
       }
     }
@@ -194,24 +182,6 @@ async function startGateway() {
   }
 
   console.log(`[gateway] ========== TOKEN SYNC COMPLETE ==========`);
-
-  // === MissionBound: Reverse bad model patch + log diagnostics ===
-  try {
-    const cfgPath = configPath();
-    const cfgRaw = fs.readFileSync(cfgPath, "utf8");
-    // Reverse the damage from the kimi-k2.5 model patch that broke the agent
-    if (cfgRaw.includes("moonshotai/kimi-k2.5")) {
-      const fixed = cfgRaw.replace(/openrouter\/moonshotai\/kimi-k2\.5/g, "openrouter/auto");
-      fs.writeFileSync(cfgPath, fixed, "utf8");
-      console.log("[gateway] ✓ REVERSED bad model patch: kimi-k2.5 → openrouter/auto");
-    }
-    const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-    const cfgStr = JSON.stringify(cfg);
-    const modelMatches = cfgStr.match(/"model"\s*:\s*"[^"]+"/g) || [];
-    console.log(`[gateway] Model config: ${modelMatches.join(", ") || "none found"}`);
-  } catch (err) {
-    console.error(`[gateway] Model fix/diagnostic failed: ${err.message}`);
-  }
 
   const args = [
     "gateway",
@@ -690,24 +660,16 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.memory", "true"]));
       console.log("[onboard] ✓ Tools configured: sessions=true, memory=true");
 
-      // === MissionBound: Log OpenRouter model config for diagnostics ===
+      // === MissionBound: Log OpenRouter model config after onboard ===
       if (payload.authChoice === "openrouter-api-key") {
         try {
-          const cfgPath = configPath();
-          const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-          const modelKeys = [];
-          // Search all possible model paths in config
-          if (cfg?.agents?.defaults?.model) modelKeys.push(`agents.defaults.model: ${JSON.stringify(cfg.agents.defaults.model)}`);
-          if (cfg?.model) modelKeys.push(`model: ${JSON.stringify(cfg.model)}`);
-          // Walk top-level keys looking for any model reference
+          const cfg = JSON.parse(fs.readFileSync(configPath(), "utf8"));
           const cfgStr = JSON.stringify(cfg);
-          const modelMatches = cfgStr.match(/"model"\s*:\s*"[^"]+"/g) || [];
-          const summary = `[onboard] Model config after OpenRouter onboard:\n  paths: ${modelKeys.join("; ") || "none found"}\n  all model refs: ${modelMatches.join(", ") || "none"}`;
-          console.log(summary);
-          extra += `\n${summary}\n`;
+          const modelRefs = cfgStr.match(/"model"\s*:\s*"[^"]+"/g) || [];
+          console.log(`[onboard] OpenRouter model refs: ${modelRefs.join(", ")}`);
+          extra += `\n[openrouter] model refs: ${modelRefs.join(", ")}\n`;
         } catch (err) {
-          console.error(`[onboard] Model diagnostic failed: ${err.message}`);
-          extra += `\n[onboard] model diagnostic failed: ${err.message}\n`;
+          extra += `\n[openrouter] model diagnostic: ${err.message}\n`;
         }
       }
 
@@ -865,21 +827,6 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
     OPENCLAW_NODE,
     clawArgs(["channels", "add", "--help"]),
   );
-  // Read config to extract model info for diagnostics
-  let modelDiag = null;
-  try {
-    const cfg = JSON.parse(fs.readFileSync(configPath(), "utf8"));
-    const cfgStr = JSON.stringify(cfg);
-    const modelMatches = cfgStr.match(/"model"\s*:\s*"[^"]+"/g) || [];
-    modelDiag = {
-      configTopLevelKeys: Object.keys(cfg),
-      agentsDefaultsModel: cfg?.agents?.defaults?.model || null,
-      topLevelModel: cfg?.model || null,
-      allModelRefs: modelMatches,
-    };
-  } catch (e) {
-    modelDiag = { error: e.message };
-  }
   res.json({
     wrapper: {
       node: process.version,
@@ -899,7 +846,6 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
       version: v.output.trim(),
       channelsAddHelpIncludesTelegram: help.output.includes("telegram"),
     },
-    model: modelDiag,
   });
 });
 

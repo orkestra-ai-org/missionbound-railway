@@ -146,12 +146,12 @@ Orchestrated via `workflows.yaml` (version 1.0.0). Full details in AGENTS.md Sec
 ### Tools (Enabled)
 | Tool | Scope | RBAC |
 |------|-------|------|
-| **Notion** | Read/Write via `exec` + `curl` (NO native tool — use curl against api.notion.com) | L3 |
+| **Notion** | Read/Write Orkestra Team + MissionBound pages | L3 |
 | **GitHub** | PRs via orkestra-github skill (CEO gate for merge) | L3 |
 | **Web Search** | Autonomous for research (requires BRAVE_API_KEY) | L3 |
 | **Web Fetch** | Autonomous for analysis — **preferred over browser on Railway** | L3 |
 | **Browser** | **OFF on Railway** (no Chrome) — use web_fetch instead | N/A |
-| **Exec** | Restricted to `gh` CLI and `curl` (github-reader + notion-tracker) | L3 |
+| **Exec** | Restricted to `gh` CLI only (github-reader skill) | L3 |
 | **github-reader** | Read GitHub repos (public + private) via `gh` + GITHUB_TOKEN | L3 |
 | **Telegram** | Send/receive in dedicated MissionBound channel | L3 |
 | **Slack** | Send/receive in #missionbound channel | L3 |
@@ -292,7 +292,6 @@ Escalate immediately to CEO if:
 - **Browser**: OFF on Railway (no Chrome). Always use `web_fetch` for URL content extraction.
 - **GitHub private repos**: Use `github-reader` skill (`gh` CLI + GITHUB_TOKEN). `web_fetch` does NOT support auth headers.
 - **GitHub scope**: PRs via orkestra-github skill only. Never direct commit.
-- **Notion**: NO native `notion` tool exists. Use `exec` + `curl` against `api.notion.com` with `$NOTION_API_KEY`. See AGENTS.md Section 11 for examples.
 - **Budget**: 5€/jour managed by Orkestra. Alert at 80%.
 - **Language**: External = English native, Internal = French OK
 - **Web search**: Requires `BRAVE_API_KEY` env var. If unavailable, use `web_fetch` as fallback.
