@@ -205,7 +205,13 @@ async function startGateway() {
   await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agent.skipBootstrap", "false"]));
   await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.sessions", "true"]));
   await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.memory", "true"]));
-  console.log("[gateway] Config applied (bootstrap=50000, sessions+memory=true)");
+  // Ensure model is set for OpenRouter (string value, not object — safe for config set)
+  if (process.env.OPENROUTER_API_KEY) {
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "model", "moonshotai/kimi-k2.5"]));
+    console.log("[gateway] Config applied (bootstrap=50000, sessions+memory=true, model=kimi-k2.5)");
+  } else {
+    console.log("[gateway] Config applied (bootstrap=50000, sessions+memory=true)");
+  }
 
   const syncResult = await runCmd(
     OPENCLAW_NODE,
@@ -872,6 +878,15 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
           clawArgs(["config", "set", "model", "minimaxai/minimax-m2.1"]),
         );
         extra += "\n[atlas] configured Atlas Cloud with OpenAI-compatible endpoint (provider: openai, model: minimaxai/minimax-m2.1)\n";
+      }
+
+      // Configure OpenRouter model if selected
+      if (payload.authChoice === "openrouter-api-key") {
+        await runCmd(
+          OPENCLAW_NODE,
+          clawArgs(["config", "set", "model", "moonshotai/kimi-k2.5"]),
+        );
+        extra += "\n[openrouter] configured model: moonshotai/kimi-k2.5\n";
       }
 
       // Apply changes immediately.
