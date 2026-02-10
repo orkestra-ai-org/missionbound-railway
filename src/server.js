@@ -165,13 +165,26 @@ async function startGateway() {
   // === MissionBound: Re-apply critical config on every gateway start ===
   // This ensures push → redeploy picks up config changes without manual reset.
   console.log("[gateway] Applying MissionBound config settings...");
+
+  // Workspace & bootstrap
   await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agent.workspace", WORKSPACE_DIR]));
   await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agent.bootstrapMaxChars", "50000"]));
   await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agent.skipBootstrap", "false"]));
+
+  // Tools
   await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.sessions", "true"]));
   await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.memory", "true"]));
   await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.exec.enabled", "true"]));
   await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "tools.exec.allowedCommands", '["gh","curl"]']));
+
+  // Model routing — ensure MissionBound model config is applied
+  // (wizard only sets the provider/auth, not the specific model routing)
+  if (process.env.OPENROUTER_API_KEY) {
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "model.default", "openrouter/moonshotai/kimi-k2.5"]));
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "model.fallback", "openrouter/moonshotai/kimi-k2.5"]));
+    console.log("[gateway] ✓ Model set to Kimi K2.5 via OpenRouter");
+  }
+
   console.log(`[gateway] ✓ MissionBound config applied (workspace=${WORKSPACE_DIR}, bootstrap=50000, exec=gh+curl)`);
 
   const syncResult = await runCmd(
