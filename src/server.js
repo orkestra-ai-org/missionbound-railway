@@ -660,6 +660,23 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.memory", "true"]));
       console.log("[onboard] ✓ Tools configured: sessions=true, memory=true");
 
+      // === MissionBound: Set OpenRouter model (onboard defaults to openrouter/auto) ===
+      if (payload.authChoice === "openrouter-api-key") {
+        try {
+          const cfgPath = configPath();
+          const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+          // Find and replace openrouter/auto with kimi-k2.5 wherever model is set
+          const cfgStr = JSON.stringify(cfg);
+          const patched = JSON.parse(cfgStr.replace(/openrouter\/auto/g, "openrouter/moonshotai/kimi-k2.5"));
+          fs.writeFileSync(cfgPath, JSON.stringify(patched, null, 2), "utf8");
+          console.log("[onboard] ✓ Model changed: openrouter/auto → openrouter/moonshotai/kimi-k2.5");
+          extra += "\n[openrouter] model: openrouter/moonshotai/kimi-k2.5 (was auto)\n";
+        } catch (err) {
+          console.error(`[onboard] Model patch failed: ${err.message}`);
+          extra += `\n[openrouter] model patch failed: ${err.message}\n`;
+        }
+      }
+
       const channelsHelp = await runCmd(
         OPENCLAW_NODE,
         clawArgs(["channels", "add", "--help"]),
