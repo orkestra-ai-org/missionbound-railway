@@ -85,7 +85,7 @@
     "browser": false,
     "exec": {
       "enabled": true,
-      "allowedCommands": ["gh", "curl"]
+      "allowedCommands": ["gh"]
     }
   },
 
@@ -103,8 +103,7 @@
         "api.deepseek.com",
         "generativelanguage.googleapis.com",
         "api.x.ai",
-        "api.twitter.com",
-        "api.notion.com"
+        "api.twitter.com"
       ]
     },
     "sandbox": {

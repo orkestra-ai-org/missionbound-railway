@@ -464,9 +464,6 @@ function buildOnboardArgs(payload) {
     // (Atlas Cloud uses OpenAI-compatible API, so map it to openai-api-key)
     const authChoiceMap = {
       "atlas-api-key": "openai-api-key",
-      // OpenRouter uses apiKey auth-choice with --token-provider openrouter
-      // (per docs.openclaw.ai/providers/openrouter)
-      "openrouter-api-key": "apiKey",
     };
     const effectiveAuthChoice = authChoiceMap[payload.authChoice] || payload.authChoice;
     args.push("--auth-choice", effectiveAuthChoice);
@@ -476,6 +473,7 @@ function buildOnboardArgs(payload) {
     const map = {
       "openai-api-key": "--openai-api-key",
       apiKey: "--anthropic-api-key",
+      "openrouter-api-key": "--openrouter-api-key",
       "ai-gateway-api-key": "--ai-gateway-api-key",
       // Atlas Cloud uses OpenAI-compatible API, so use --openai-api-key
       "atlas-api-key": "--openai-api-key",
@@ -491,11 +489,6 @@ function buildOnboardArgs(payload) {
     const flag = map[payload.authChoice];
     if (flag && secret) {
       args.push(flag, secret);
-    }
-
-    // OpenRouter uses --token-provider openrouter --token KEY
-    if (payload.authChoice === "openrouter-api-key" && secret) {
-      args.push("--token-provider", "openrouter", "--token", secret);
     }
 
     if (payload.authChoice === "token" && secret) {
@@ -797,29 +790,6 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
           clawArgs(["config", "set", "model", "minimaxai/minimax-m2.1"]),
         );
         extra += "\n[atlas] configured Atlas Cloud with OpenAI-compatible endpoint (provider: openai, model: minimaxai/minimax-m2.1)\n";
-      }
-
-      // Configure OpenRouter model if selected
-      // OpenClaw 2026.2.9 defaults to anthropic/claude-opus-4-6.
-      // Model must be at agents.defaults.model.primary (per docs.openclaw.ai)
-      // Direct JSON patch because `config set --json` fails silently for this path.
-      if (payload.authChoice === "openrouter-api-key") {
-        try {
-          const cfgPath = configPath();
-          const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-          if (!cfg.agents) cfg.agents = {};
-          if (!cfg.agents.defaults) cfg.agents.defaults = {};
-          cfg.agents.defaults.model = {
-            primary: "openrouter/moonshotai/kimi-k2.5",
-            fallbacks: ["openrouter/deepseek/deepseek-chat-v3"]
-          };
-          fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
-          extra += "\n[openrouter] patched agents.defaults.model.primary = openrouter/moonshotai/kimi-k2.5\n";
-          console.log("[onboard] ✓ OpenRouter model set via direct config patch");
-        } catch (err) {
-          extra += `\n[openrouter] model patch failed: ${err.message}\n`;
-          console.error(`[onboard] OpenRouter model patch failed: ${err.message}`);
-        }
       }
 
       // Apply changes immediately.
