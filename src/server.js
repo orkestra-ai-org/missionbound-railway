@@ -162,46 +162,43 @@ async function startGateway() {
   console.log(`[gateway] ========== GATEWAY START TOKEN SYNC ==========`);
   console.log(`[gateway] Syncing wrapper token to config: ${OPENCLAW_GATEWAY_TOKEN.slice(0, 16)}... (len: ${OPENCLAW_GATEWAY_TOKEN.length})`);
 
-  // === MissionBound: Re-apply critical config on every gateway start ===
-  // This ensures push → redeploy picks up config changes without manual reset.
-  // We patch the config JSON file directly because some `openclaw config set` keys
-  // are not recognized by the CLI and can corrupt the config or crash the gateway.
-  console.log("[gateway] Applying MissionBound config settings...");
-
+  // === MissionBound: Clean up any corrupted config from previous deploys ===
+  // Previous versions wrote tools.exec as object and model.default/fallback as strings,
+  // which the gateway can't parse. Remove those keys so the gateway can start.
   try {
     const cfgPath = configPath();
-    const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-
-    // Agent / bootstrap
-    if (!cfg.agent) cfg.agent = {};
-    cfg.agent.workspace = WORKSPACE_DIR;
-    cfg.agent.bootstrapMaxChars = 50000;
-    cfg.agent.skipBootstrap = false;
-
-    // Tools
-    if (!cfg.tools) cfg.tools = {};
-    cfg.tools.sessions = true;
-    cfg.tools.memory = true;
-    cfg.tools.exec = { enabled: true, allowedCommands: ["gh", "curl"] };
-
-    // Model — only set if using OpenRouter
-    if (process.env.OPENROUTER_API_KEY) {
-      if (!cfg.model) cfg.model = {};
-      cfg.model.default = "openrouter/moonshotai/kimi-k2.5";
-      cfg.model.fallback = "openrouter/moonshotai/kimi-k2.5";
-      console.log("[gateway]   model → Kimi K2.5 via OpenRouter");
+    if (fs.existsSync(cfgPath)) {
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+      let dirty = false;
+      // tools.exec must be boolean, not object
+      if (cfg.tools && typeof cfg.tools.exec === "object" && cfg.tools.exec !== null) {
+        delete cfg.tools.exec;
+        dirty = true;
+        console.log("[gateway] Removed corrupted tools.exec (was object)");
+      }
+      // model must be string, not object
+      if (cfg.model && typeof cfg.model === "object") {
+        delete cfg.model;
+        dirty = true;
+        console.log("[gateway] Removed corrupted model config (was object)");
+      }
+      if (dirty) {
+        fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
+        console.log("[gateway] Config cleaned up successfully");
+      }
     }
-
-    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
-    console.log(`[gateway] ✓ MissionBound config patched (workspace=${WORKSPACE_DIR}, bootstrap=50000, exec=gh+curl)`);
-  } catch (err) {
-    console.error(`[gateway] ⚠️ Failed to patch config: ${err}. Falling back to config set commands.`);
-    // Fallback to safe config set commands only
-    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agent.bootstrapMaxChars", "50000"]));
-    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agent.skipBootstrap", "false"]));
-    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.sessions", "true"]));
-    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.memory", "true"]));
+  } catch (cleanupErr) {
+    console.error(`[gateway] Config cleanup error (non-fatal): ${cleanupErr.message}`);
   }
+
+  // === MissionBound: Re-apply safe config on every gateway start ===
+  // Only use proven `openclaw config set` keys. Do NOT patch JSON directly.
+  console.log("[gateway] Applying MissionBound config (safe subset)...");
+  await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agent.bootstrapMaxChars", "50000"]));
+  await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agent.skipBootstrap", "false"]));
+  await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.sessions", "true"]));
+  await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.memory", "true"]));
+  console.log("[gateway] Config applied (bootstrap=50000, sessions+memory=true)");
 
   const syncResult = await runCmd(
     OPENCLAW_NODE,
