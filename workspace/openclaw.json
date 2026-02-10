@@ -1,5 +1,156 @@
 {
   "$schema": "https://openclaw.ai/schemas/config.json",
+
+  "agent": {
+    "workspace": "/data/workspace",
+    "skipBootstrap": false,
+    "bootstrapMaxChars": 50000
+  },
+
+  "model": {
+    "provider": "openrouter",
+    "default": "openrouter/moonshotai/kimi-k2.5",
+    "fallback": "openrouter/moonshotai/kimi-k2.5",
+    "premium": "anthropic/claude-opus-4-5-20251101",
+    "routing": {
+      "rules": [
+        {
+          "name": "strategic",
+          "triggers": ["vision", "architecture", "decision", "arbitrage", "agent-factory", "security", "infrastructure"],
+          "model": "anthropic/claude-opus-4-5-20251101"
+        },
+        {
+          "name": "critical-coding",
+          "triggers": ["refactor", "deploy", "pipeline", "ci/cd", "database-migration"],
+          "model": "anthropic/claude-opus-4-5-20251101"
+        },
+        {
+          "name": "web-browsing",
+          "triggers": ["browse", "scrape", "fetch-url", "web-search", "crawl"],
+          "model": "openrouter/deepseek/deepseek-chat-v3"
+        },
+        {
+          "name": "image-analysis",
+          "triggers": ["image", "screenshot", "photo", "picture", "visual"],
+          "model": "openrouter/google/gemini-2.5-flash"
+        },
+        {
+          "name": "twitter-x",
+          "triggers": ["twitter", "tweet", "X", "post-x", "timeline", "trending"],
+          "model": "openrouter/xai/grok-4.1-fast"
+        }
+      ],
+      "defaultModel": "openrouter/moonshotai/kimi-k2.5"
+    },
+    "heartbeat": {
+      "model": "openrouter/moonshotai/kimi-k2.5",
+      "intervalMinutes": 60
+    }
+  },
+
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "botToken": "${TELEGRAM_BOT_TOKEN}",
+      "dmPolicy": "allowlist",
+      "allowFrom": ["1576473251"],
+      "groupPolicy": "disabled",
+      "reactionLevel": "minimal",
+      "streamMode": "partial",
+      "commands": {
+        "native": true
+      },
+      "customCommands": [
+        { "command": "status", "description": "État du système" },
+        { "command": "budget", "description": "Consommation du jour" },
+        { "command": "agents", "description": "Liste des agents" },
+        { "command": "improve", "description": "Proposer amélioration" }
+      ]
+    }
+  },
+
+  "tools": {
+    "memory": true,
+    "sessions": true,
+    "fs": {
+      "read": {
+        "enabled": true,
+        "allowedPaths": ["./", "../enterprise/"]
+      },
+      "write": {
+        "enabled": true,
+        "allowedPaths": ["./memory/"]
+      }
+    },
+    "browser": false,
+    "exec": {
+      "enabled": true,
+      "allowedCommands": ["gh", "curl"]
+    }
+  },
+
+  "security": {
+    "level": "L2",
+    "egress": {
+      "default": "deny",
+      "allowlist": [
+        "api.telegram.org",
+        "api.anthropic.com",
+        "openrouter.ai",
+        "api.github.com",
+        "github.com",
+        "raw.githubusercontent.com",
+        "api.deepseek.com",
+        "generativelanguage.googleapis.com",
+        "api.x.ai",
+        "api.twitter.com",
+        "api.notion.com"
+      ]
+    },
+    "sandbox": {
+      "enabled": true,
+      "workspaceAccess": "rw"
+    }
+  },
+
+  "limits": {
+    "tokensPerDay": 500000,
+    "costPerDayUsd": 5.00,
+    "alertThreshold": 0.80,
+    "maxRetries": 3,
+    "timeoutSeconds": 120
+  },
+
+  "memory": {
+    "autoFlush": true,
+    "flushBeforeCompaction": true,
+    "dailyLogs": true,
+    "searchEnabled": true
+  },
+
+  "contextPruning": {
+    "mode": "cache-ttl",
+    "ttl": 300,
+    "keepLastAssistants": 3,
+    "softTrim": true,
+    "hardClear": true
+  },
+
+  "logging": {
+    "level": "info",
+    "auditEnabled": true,
+    "redactSecrets": true,
+    "dlp": {
+      "enabled": true,
+      "patterns": ["api_key", "token", "password", "secret", "-----BEGIN"]
+    }
+  },
+
+  "commands": {
+    "native": "auto",
+    "text": true
+  },
+
   "metadata": {
     "name": "MissionBound Growth",
     "version": "1.0.0",

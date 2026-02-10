@@ -66,7 +66,6 @@ function isConfigured() {
 
 let gatewayProc = null;
 let gatewayStarting = null;
-let gatewayOutput = ""; // Capture gateway stdout/stderr for diagnostics
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -104,47 +103,29 @@ async function startGateway() {
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 
   // Sync MissionBound workspace files from image to volume.
-  // Always overwrite files to ensure latest personality + skills are loaded.
-  // Also remove stale .md files from volume that are no longer in the image.
+  // Always overwrite .md files to ensure latest personality is loaded.
+  // Also remove stale files from volume that are no longer in the image.
   const imageWorkspaceDir = "/root/.openclaw/workspace";
   if (fs.existsSync(imageWorkspaceDir)) {
     const imageFiles = new Set(fs.readdirSync(imageWorkspaceDir));
-
-    // Recursively sync all files from image to volume, overwriting existing.
-    // This ensures skill updates, AGENTS.md changes, etc. are always deployed.
-    function syncDir(src, dest) {
-      fs.mkdirSync(dest, { recursive: true });
-      const entries = fs.readdirSync(src, { withFileTypes: true });
-      for (const entry of entries) {
-        const srcPath = path.join(src, entry.name);
-        const destPath = path.join(dest, entry.name);
-        if (entry.isDirectory()) {
-          syncDir(srcPath, destPath);
-        } else {
-          // Always overwrite — image is the source of truth for code/config.
-          // Exception: MEMORY.md and memory/ files are agent-generated and must be preserved.
-          const relPath = path.relative(imageWorkspaceDir, srcPath);
-          const isMemoryFile = relPath === "MEMORY.md"
-            || relPath.startsWith("memory" + path.sep)
-            || relPath === "memory";
-          if (isMemoryFile) {
-            if (!fs.existsSync(destPath)) {
-              fs.cpSync(srcPath, destPath);
-              console.log(`[setup] Copied new memory file ${relPath}`);
-            } else {
-              console.log(`[setup] Preserved agent memory file ${relPath}`);
-            }
-          } else {
-            fs.cpSync(srcPath, destPath);
-            console.log(`[setup] Synced ${relPath}`);
-          }
+    // Copy/overwrite all files from image to volume
+    for (const file of imageFiles) {
+      const srcPath = path.join(imageWorkspaceDir, file);
+      const destPath = path.join(WORKSPACE_DIR, file);
+      const isDir = fs.statSync(srcPath).isDirectory();
+      if (isDir) {
+        // For directories (skills/, memory/), copy if not present
+        if (!fs.existsSync(destPath)) {
+          fs.cpSync(srcPath, destPath, { recursive: true });
+          console.log(`[setup] Copied directory ${file} to workspace`);
         }
+      } else {
+        // For files (.md, .json), always overwrite to pick up changes
+        fs.cpSync(srcPath, destPath, { recursive: true });
+        console.log(`[setup] Synced ${file} to workspace`);
       }
     }
-
-    syncDir(imageWorkspaceDir, WORKSPACE_DIR);
-
-    // Remove stale .md files from workspace root that are no longer in the image
+    // Remove stale .md files from volume that are no longer in the image
     // (e.g., IDENTITY.md, DEPLOY.md removed to fix personality conflict)
     const volumeFiles = fs.readdirSync(WORKSPACE_DIR);
     for (const file of volumeFiles) {
@@ -162,79 +143,6 @@ async function startGateway() {
   // This ensures the gateway's config-file token matches what the wrapper injects via proxy.
   console.log(`[gateway] ========== GATEWAY START TOKEN SYNC ==========`);
   console.log(`[gateway] Syncing wrapper token to config: ${OPENCLAW_GATEWAY_TOKEN.slice(0, 16)}... (len: ${OPENCLAW_GATEWAY_TOKEN.length})`);
-
-  // === MissionBound: Targeted config cleanup ===
-  // Fix specific fields that were corrupted by previous JSON patching.
-  // Only remove keys we KNOW are wrong — leave everything else intact
-  // so auth credentials and model config survive redeploys.
-  try {
-    const cfgPath = configPath();
-    if (fs.existsSync(cfgPath)) {
-      const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-      let dirty = false;
-
-      // tools.exec must be boolean, not object
-      if (cfg.tools && typeof cfg.tools.exec === "object" && cfg.tools.exec !== null) {
-        delete cfg.tools.exec;
-        dirty = true;
-        console.log("[gateway] Fixed: removed tools.exec (was object, should be boolean)");
-      }
-
-      // agent.workspace is not a valid OpenClaw config key — it was set by our
-      // old JSON patching code and may cause the gateway to reject the config.
-      if (cfg.agent && "workspace" in cfg.agent) {
-        delete cfg.agent.workspace;
-        dirty = true;
-        console.log("[gateway] Fixed: removed invalid agent.workspace key");
-      }
-
-      if (dirty) {
-        fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
-        console.log("[gateway] Config cleanup applied");
-      }
-      console.log(`[gateway] Config keys: ${Object.keys(cfg).join(", ")}`);
-    }
-  } catch (cleanupErr) {
-    console.error(`[gateway] Config cleanup error (non-fatal): ${cleanupErr.message}`);
-  }
-
-  // === MissionBound: Dump config structure for diagnostics ===
-  try {
-    const cfgPath = configPath();
-    const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-    console.log(`[gateway] Runtime config top-level keys: ${Object.keys(cfg).join(", ")}`);
-    if (cfg.agents) {
-      console.log(`[gateway] agents keys: ${JSON.stringify(Object.keys(cfg.agents))}`);
-      // Dump agent structure (without secrets)
-      for (const [agentId, agentCfg] of Object.entries(cfg.agents)) {
-        if (typeof agentCfg === "object" && agentCfg !== null) {
-          console.log(`[gateway] agents.${agentId} keys: ${JSON.stringify(Object.keys(agentCfg))}`);
-          if (agentCfg.agent) console.log(`[gateway] agents.${agentId}.agent keys: ${JSON.stringify(Object.keys(agentCfg.agent))}`);
-          if (agentCfg.model) console.log(`[gateway] agents.${agentId}.model = ${JSON.stringify(agentCfg.model)}`);
-        }
-      }
-    }
-    if (cfg.meta) console.log(`[gateway] meta keys: ${JSON.stringify(Object.keys(cfg.meta))}`);
-    if (cfg.plugins) console.log(`[gateway] plugins keys: ${JSON.stringify(Object.keys(cfg.plugins))}`);
-  } catch (e) {
-    console.error(`[gateway] Config dump error: ${e.message}`);
-  }
-
-  // === MissionBound: Set model for OpenRouter ===
-  // OpenClaw 2026.2.9 config schema: model may be under `agents` not top-level.
-  // Try multiple approaches and log results.
-  if (process.env.OPENROUTER_API_KEY) {
-    console.log("[gateway] OpenRouter detected — attempting to set model...");
-    const modelAttempts = [
-      ["config", "set", "model", "openrouter/moonshotai/kimi-k2.5"],
-      ["config", "set", "agents.main.model", "openrouter/moonshotai/kimi-k2.5"],
-      ["config", "set", "agents.main.agent.model", "openrouter/moonshotai/kimi-k2.5"],
-    ];
-    for (const args of modelAttempts) {
-      const r = await runCmd(OPENCLAW_NODE, clawArgs(args));
-      console.log(`[gateway] ${args.join(" ")} → exit=${r.code} output=${r.output.trim().slice(0, 200)}`);
-    }
-  }
 
   const syncResult = await runCmd(
     OPENCLAW_NODE,
@@ -288,10 +196,8 @@ async function startGateway() {
     OPENCLAW_GATEWAY_TOKEN,
   ];
 
-  gatewayOutput = ""; // Reset output capture
-
   gatewayProc = childProcess.spawn(OPENCLAW_NODE, clawArgs(args), {
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: "inherit",
     env: {
       ...process.env,
       OPENCLAW_STATE_DIR: STATE_DIR,
@@ -304,30 +210,13 @@ async function startGateway() {
   console.log(`[gateway] WORKSPACE_DIR: ${WORKSPACE_DIR}`);
   console.log(`[gateway] config path: ${configPath()}`);
 
-  // Capture gateway output for diagnostics (also forward to parent stdout)
-  gatewayProc.stdout.on("data", (d) => {
-    const text = d.toString("utf8");
-    process.stdout.write(`[gw:out] ${text}`);
-    gatewayOutput += text;
-    // Keep last 10KB only
-    if (gatewayOutput.length > 10240) gatewayOutput = gatewayOutput.slice(-10240);
-  });
-  gatewayProc.stderr.on("data", (d) => {
-    const text = d.toString("utf8");
-    process.stderr.write(`[gw:err] ${text}`);
-    gatewayOutput += text;
-    if (gatewayOutput.length > 10240) gatewayOutput = gatewayOutput.slice(-10240);
-  });
-
   gatewayProc.on("error", (err) => {
     console.error(`[gateway] spawn error: ${String(err)}`);
-    gatewayOutput += `\n[SPAWN ERROR] ${String(err)}\n`;
     gatewayProc = null;
   });
 
   gatewayProc.on("exit", (code, signal) => {
     console.error(`[gateway] exited code=${code} signal=${signal}`);
-    gatewayOutput += `\n[EXIT] code=${code} signal=${signal}\n`;
     gatewayProc = null;
   });
 }
@@ -338,7 +227,7 @@ async function ensureGatewayRunning() {
   if (!gatewayStarting) {
     gatewayStarting = (async () => {
       await startGateway();
-      const ready = await waitForGatewayReady({ timeoutMs: 60_000 });
+      const ready = await waitForGatewayReady({ timeoutMs: 20_000 });
       if (!ready) {
         throw new Error("Gateway did not become ready in time");
       }
@@ -903,15 +792,6 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
         extra += "\n[atlas] configured Atlas Cloud with OpenAI-compatible endpoint (provider: openai, model: minimaxai/minimax-m2.1)\n";
       }
 
-      // Configure OpenRouter model if selected
-      if (payload.authChoice === "openrouter-api-key") {
-        await runCmd(
-          OPENCLAW_NODE,
-          clawArgs(["config", "set", "model", "moonshotai/kimi-k2.5"]),
-        );
-        extra += "\n[openrouter] configured model: moonshotai/kimi-k2.5\n";
-      }
-
       // Apply changes immediately.
       await restartGateway();
     }
@@ -934,30 +814,6 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
     OPENCLAW_NODE,
     clawArgs(["channels", "add", "--help"]),
   );
-  // Read full config (masked) for diagnostics
-  let configKeys = [];
-  let configDump = {};
-  try {
-    const cfg = JSON.parse(fs.readFileSync(configPath(), "utf8"));
-    configKeys = Object.keys(cfg);
-    // Deep copy and mask sensitive values
-    configDump = JSON.parse(JSON.stringify(cfg));
-    const maskDeep = (obj) => {
-      for (const [k, v] of Object.entries(obj)) {
-        if (typeof v === "string" && /key|token|secret|password|apiKey|botToken/i.test(k)) obj[k] = "***";
-        else if (v && typeof v === "object" && !Array.isArray(v)) maskDeep(v);
-      }
-    };
-    maskDeep(configDump);
-  } catch { /* ignore */ }
-
-  // Get full config via CLI
-  const configGet = await runCmd(OPENCLAW_NODE, clawArgs(["config", "get"]));
-  // Get agents help
-  const agentsHelp = await runCmd(OPENCLAW_NODE, clawArgs(["agents", "--help"]));
-  // Get gateway run help
-  const gatewayRunHelp = await runCmd(OPENCLAW_NODE, clawArgs(["gateway", "run", "--help"]));
-
   res.json({
     wrapper: {
       node: process.version,
@@ -965,13 +821,11 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
       stateDir: STATE_DIR,
       workspaceDir: WORKSPACE_DIR,
       configPath: configPath(),
-      configKeys,
       gatewayTokenFromEnv: Boolean(process.env.OPENCLAW_GATEWAY_TOKEN?.trim()),
       gatewayTokenPersisted: fs.existsSync(
         path.join(STATE_DIR, "gateway.token"),
       ),
       railwayCommit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
-      gatewayPid: gatewayProc?.pid || null,
     },
     openclaw: {
       entry: OPENCLAW_ENTRY,
@@ -979,64 +833,7 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
       version: v.output.trim(),
       channelsAddHelpIncludesTelegram: help.output.includes("telegram"),
     },
-    configDump,
-    configGetOutput: configGet.output || "(no output)",
-    agentsHelp: agentsHelp.output || "(no output)",
-    gatewayRunHelp: gatewayRunHelp.output || "(no output)",
-    gatewayOutput: gatewayOutput || "(no output)",
   });
-});
-
-// List session files for recovery (read-only diagnostic endpoint)
-app.get("/setup/api/sessions", requireSetupAuth, (_req, res) => {
-  const sessionsDir = path.join(STATE_DIR, "sessions");
-  try {
-    if (!fs.existsSync(sessionsDir)) {
-      return res.json({ found: false, message: "No sessions directory found", path: sessionsDir });
-    }
-    const files = [];
-    function walk(dir, prefix) {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const full = path.join(dir, entry.name);
-        const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-        if (entry.isDirectory()) {
-          walk(full, rel);
-        } else {
-          const stat = fs.statSync(full);
-          files.push({ path: rel, size: stat.size, modified: stat.mtime.toISOString() });
-        }
-      }
-    }
-    walk(sessionsDir, "");
-    return res.json({ found: true, count: files.length, sessionsDir, files });
-  } catch (err) {
-    return res.status(500).json({ error: String(err) });
-  }
-});
-
-// Read a specific session file content for recovery
-// Express 5 wildcard syntax: {*splat} captures the rest of the path
-app.get("/setup/api/session-file", requireSetupAuth, (req, res) => {
-  const sessionsDir = path.join(STATE_DIR, "sessions");
-  const filename = req.query.path;
-  if (!filename) {
-    return res.status(400).json({ error: "Missing ?path= query parameter" });
-  }
-  const filePath = path.join(sessionsDir, filename);
-  // Security: ensure path stays within sessions dir
-  if (!filePath.startsWith(sessionsDir)) {
-    return res.status(403).json({ error: "Access denied" });
-  }
-  try {
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: "Session file not found" });
-    }
-    const content = fs.readFileSync(filePath, "utf8");
-    res.type("application/json").send(content);
-  } catch (err) {
-    return res.status(500).json({ error: String(err) });
-  }
 });
 
 app.post("/setup/api/pairing/approve", requireSetupAuth, async (req, res) => {
@@ -1149,29 +946,10 @@ app.use(async (req, res) => {
     try {
       await ensureGatewayRunning();
     } catch (err) {
-      // Include gateway output and config (masked) for diagnostics
-      let diag = `Gateway not ready: ${String(err)}\n`;
-      diag += `\n--- Gateway Output (last 10KB) ---\n${gatewayOutput || "(no output captured)"}\n`;
-      try {
-        const cfg = JSON.parse(fs.readFileSync(configPath(), "utf8"));
-        // Mask sensitive values
-        const masked = JSON.parse(JSON.stringify(cfg));
-        if (masked.gateway?.auth?.token) masked.gateway.auth.token = "***";
-        if (masked.channels?.telegram?.botToken) masked.channels.telegram.botToken = "***";
-        if (masked.channels?.discord?.token) masked.channels.discord.token = "***";
-        if (masked.channels?.slack?.botToken) masked.channels.slack.botToken = "***";
-        if (masked.channels?.slack?.appToken) masked.channels.slack.appToken = "***";
-        // Mask any key containing "key", "token", "secret" at any depth
-        const maskDeep = (obj) => {
-          for (const [k, v] of Object.entries(obj)) {
-            if (typeof v === "string" && /key|token|secret/i.test(k)) obj[k] = "***";
-            else if (v && typeof v === "object") maskDeep(v);
-          }
-        };
-        maskDeep(masked);
-        diag += `\n--- Runtime Config (masked) ---\n${JSON.stringify(masked, null, 2)}\n`;
-      } catch { /* ignore */ }
-      return res.status(503).type("text/plain").send(diag);
+      return res
+        .status(503)
+        .type("text/plain")
+        .send(`Gateway not ready: ${String(err)}`);
     }
   }
 
