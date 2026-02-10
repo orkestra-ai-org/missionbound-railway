@@ -195,14 +195,22 @@ async function startGateway() {
 
   console.log(`[gateway] ========== TOKEN SYNC COMPLETE ==========`);
 
-  // === MissionBound: Log model config for diagnostics ===
+  // === MissionBound: Reverse bad model patch + log diagnostics ===
   try {
     const cfgPath = configPath();
+    const cfgRaw = fs.readFileSync(cfgPath, "utf8");
+    // Reverse the damage from the kimi-k2.5 model patch that broke the agent
+    if (cfgRaw.includes("moonshotai/kimi-k2.5")) {
+      const fixed = cfgRaw.replace(/openrouter\/moonshotai\/kimi-k2\.5/g, "openrouter/auto");
+      fs.writeFileSync(cfgPath, fixed, "utf8");
+      console.log("[gateway] ✓ REVERSED bad model patch: kimi-k2.5 → openrouter/auto");
+    }
     const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-    const modelInfo = cfg?.agents?.defaults?.model || cfg?.model || "not found";
-    console.log(`[gateway] Model config: ${JSON.stringify(modelInfo)}`);
+    const cfgStr = JSON.stringify(cfg);
+    const modelMatches = cfgStr.match(/"model"\s*:\s*"[^"]+"/g) || [];
+    console.log(`[gateway] Model config: ${modelMatches.join(", ") || "none found"}`);
   } catch (err) {
-    console.error(`[gateway] Model diagnostic failed: ${err.message}`);
+    console.error(`[gateway] Model fix/diagnostic failed: ${err.message}`);
   }
 
   const args = [
