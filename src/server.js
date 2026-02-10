@@ -103,29 +103,42 @@ async function startGateway() {
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 
   // Sync MissionBound workspace files from image to volume.
-  // Always overwrite .md files to ensure latest personality is loaded.
-  // Also remove stale files from volume that are no longer in the image.
+  // Always overwrite files to ensure latest personality + skills are loaded.
+  // Also remove stale .md files from volume that are no longer in the image.
   const imageWorkspaceDir = "/root/.openclaw/workspace";
   if (fs.existsSync(imageWorkspaceDir)) {
     const imageFiles = new Set(fs.readdirSync(imageWorkspaceDir));
-    // Copy/overwrite all files from image to volume
-    for (const file of imageFiles) {
-      const srcPath = path.join(imageWorkspaceDir, file);
-      const destPath = path.join(WORKSPACE_DIR, file);
-      const isDir = fs.statSync(srcPath).isDirectory();
-      if (isDir) {
-        // For directories (skills/, memory/), copy if not present
-        if (!fs.existsSync(destPath)) {
-          fs.cpSync(srcPath, destPath, { recursive: true });
-          console.log(`[setup] Copied directory ${file} to workspace`);
+
+    // Recursively sync all files from image to volume, overwriting existing.
+    // This ensures skill updates, AGENTS.md changes, etc. are always deployed.
+    function syncDir(src, dest) {
+      fs.mkdirSync(dest, { recursive: true });
+      const entries = fs.readdirSync(src, { withFileTypes: true });
+      for (const entry of entries) {
+        const srcPath = path.join(src, entry.name);
+        const destPath = path.join(dest, entry.name);
+        if (entry.isDirectory()) {
+          syncDir(srcPath, destPath);
+        } else {
+          // Always overwrite — image is the source of truth for code/config.
+          // Exception: memory/ files are agent-generated and should not be overwritten.
+          const relPath = path.relative(imageWorkspaceDir, srcPath);
+          if (relPath.startsWith("memory" + path.sep) || relPath === "memory") {
+            if (!fs.existsSync(destPath)) {
+              fs.cpSync(srcPath, destPath);
+              console.log(`[setup] Copied new memory file ${relPath}`);
+            }
+          } else {
+            fs.cpSync(srcPath, destPath);
+            console.log(`[setup] Synced ${relPath}`);
+          }
         }
-      } else {
-        // For files (.md, .json), always overwrite to pick up changes
-        fs.cpSync(srcPath, destPath, { recursive: true });
-        console.log(`[setup] Synced ${file} to workspace`);
       }
     }
-    // Remove stale .md files from volume that are no longer in the image
+
+    syncDir(imageWorkspaceDir, WORKSPACE_DIR);
+
+    // Remove stale .md files from workspace root that are no longer in the image
     // (e.g., IDENTITY.md, DEPLOY.md removed to fix personality conflict)
     const volumeFiles = fs.readdirSync(WORKSPACE_DIR);
     for (const file of volumeFiles) {
