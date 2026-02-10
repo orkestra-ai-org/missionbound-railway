@@ -895,9 +895,13 @@ app.get("/setup/api/sessions", requireSetupAuth, (_req, res) => {
 });
 
 // Read a specific session file content for recovery
-app.get("/setup/api/sessions/:filename(*)", requireSetupAuth, (req, res) => {
+app.get("/setup/api/sessions/*", requireSetupAuth, (req, res) => {
   const sessionsDir = path.join(STATE_DIR, "sessions");
-  const filePath = path.join(sessionsDir, req.params.filename);
+  const filename = req.params[0];
+  if (!filename) {
+    return res.status(400).json({ error: "No filename specified" });
+  }
+  const filePath = path.join(sessionsDir, filename);
   // Security: ensure path stays within sessions dir
   if (!filePath.startsWith(sessionsDir)) {
     return res.status(403).json({ error: "Access denied" });
