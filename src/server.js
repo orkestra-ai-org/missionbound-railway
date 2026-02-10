@@ -121,12 +121,17 @@ async function startGateway() {
           syncDir(srcPath, destPath);
         } else {
           // Always overwrite — image is the source of truth for code/config.
-          // Exception: memory/ files are agent-generated and should not be overwritten.
+          // Exception: MEMORY.md and memory/ files are agent-generated and must be preserved.
           const relPath = path.relative(imageWorkspaceDir, srcPath);
-          if (relPath.startsWith("memory" + path.sep) || relPath === "memory") {
+          const isMemoryFile = relPath === "MEMORY.md"
+            || relPath.startsWith("memory" + path.sep)
+            || relPath === "memory";
+          if (isMemoryFile) {
             if (!fs.existsSync(destPath)) {
               fs.cpSync(srcPath, destPath);
               console.log(`[setup] Copied new memory file ${relPath}`);
+            } else {
+              console.log(`[setup] Preserved agent memory file ${relPath}`);
             }
           } else {
             fs.cpSync(srcPath, destPath);
@@ -160,11 +165,14 @@ async function startGateway() {
   // === MissionBound: Re-apply critical config on every gateway start ===
   // This ensures push → redeploy picks up config changes without manual reset.
   console.log("[gateway] Applying MissionBound config settings...");
+  await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agent.workspace", WORKSPACE_DIR]));
   await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agent.bootstrapMaxChars", "50000"]));
   await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agent.skipBootstrap", "false"]));
   await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.sessions", "true"]));
   await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.memory", "true"]));
-  console.log("[gateway] ✓ MissionBound config applied (bootstrap, sessions, memory)");
+  await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.exec.enabled", "true"]));
+  await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "tools.exec.allowedCommands", '["gh","curl"]']));
+  console.log(`[gateway] ✓ MissionBound config applied (workspace=${WORKSPACE_DIR}, bootstrap=50000, exec=gh+curl)`);
 
   const syncResult = await runCmd(
     OPENCLAW_NODE,
