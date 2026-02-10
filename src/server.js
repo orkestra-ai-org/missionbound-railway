@@ -895,11 +895,12 @@ app.get("/setup/api/sessions", requireSetupAuth, (_req, res) => {
 });
 
 // Read a specific session file content for recovery
-app.get("/setup/api/sessions/*", requireSetupAuth, (req, res) => {
+// Express 5 wildcard syntax: {*splat} captures the rest of the path
+app.get("/setup/api/session-file", requireSetupAuth, (req, res) => {
   const sessionsDir = path.join(STATE_DIR, "sessions");
-  const filename = req.params[0];
+  const filename = req.query.path;
   if (!filename) {
-    return res.status(400).json({ error: "No filename specified" });
+    return res.status(400).json({ error: "Missing ?path= query parameter" });
   }
   const filePath = path.join(sessionsDir, filename);
   // Security: ensure path stays within sessions dir
