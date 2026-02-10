@@ -102,34 +102,33 @@ async function startGateway() {
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 
-  // Sync MissionBound workspace files from image to volume.
-  // Always overwrite .md files to ensure latest personality is loaded.
-  // Also remove stale files from volume that are no longer in the image.
+  // Sync MissionBound workspace files from image to volume (recursive).
+  // Overwrites all files EXCEPT memory/ dir and MEMORY.md (agent-generated).
   const imageWorkspaceDir = "/root/.openclaw/workspace";
-  if (fs.existsSync(imageWorkspaceDir)) {
-    const imageFiles = new Set(fs.readdirSync(imageWorkspaceDir));
-    // Copy/overwrite all files from image to volume
-    for (const file of imageFiles) {
-      const srcPath = path.join(imageWorkspaceDir, file);
-      const destPath = path.join(WORKSPACE_DIR, file);
-      const isDir = fs.statSync(srcPath).isDirectory();
-      if (isDir) {
-        // For directories (skills/, memory/), copy if not present
-        if (!fs.existsSync(destPath)) {
-          fs.cpSync(srcPath, destPath, { recursive: true });
-          console.log(`[setup] Copied directory ${file} to workspace`);
-        }
+  function syncDir(src, dest, relPath) {
+    fs.mkdirSync(dest, { recursive: true });
+    const entries = fs.readdirSync(src, { withFileTypes: true });
+    for (const entry of entries) {
+      const rel = relPath ? `${relPath}/${entry.name}` : entry.name;
+      // Protect agent-generated content
+      if (rel === "memory" || rel === "MEMORY.md") continue;
+      const srcFull = path.join(src, entry.name);
+      const destFull = path.join(dest, entry.name);
+      if (entry.isDirectory()) {
+        syncDir(srcFull, destFull, rel);
       } else {
-        // For files (.md, .json), always overwrite to pick up changes
-        fs.cpSync(srcPath, destPath, { recursive: true });
-        console.log(`[setup] Synced ${file} to workspace`);
+        fs.copyFileSync(srcFull, destFull);
+        console.log(`[setup] Synced ${rel}`);
       }
     }
-    // Remove stale .md files from volume that are no longer in the image
-    // (e.g., IDENTITY.md, DEPLOY.md removed to fix personality conflict)
+  }
+  if (fs.existsSync(imageWorkspaceDir)) {
+    syncDir(imageWorkspaceDir, WORKSPACE_DIR, "");
+    // Remove stale .md files from volume root that are no longer in the image
+    const imageFiles = new Set(fs.readdirSync(imageWorkspaceDir));
     const volumeFiles = fs.readdirSync(WORKSPACE_DIR);
     for (const file of volumeFiles) {
-      if (file.endsWith(".md") && !imageFiles.has(file)) {
+      if (file.endsWith(".md") && file !== "MEMORY.md" && !imageFiles.has(file)) {
         const stalePath = path.join(WORKSPACE_DIR, file);
         if (fs.statSync(stalePath).isFile()) {
           fs.rmSync(stalePath);
@@ -182,6 +181,23 @@ async function startGateway() {
   }
 
   console.log(`[gateway] ========== TOKEN SYNC COMPLETE ==========`);
+
+  // === MissionBound: Ensure model is kimi-k2.5, not "auto" ===
+  try {
+    const cfgPath = configPath();
+    const cfgRaw = fs.readFileSync(cfgPath, "utf8");
+    // Match "model": "auto" (the value OpenClaw stores after OpenRouter onboard)
+    const autoPattern = /"model"(\s*:\s*)"auto"/g;
+    if (autoPattern.test(cfgRaw)) {
+      const patched = cfgRaw.replace(/"model"(\s*:\s*)"auto"/g, '"model"$1"moonshotai/kimi-k2.5"');
+      fs.writeFileSync(cfgPath, patched, "utf8");
+      console.log('[gateway] ✓ Model patched: "auto" → "moonshotai/kimi-k2.5"');
+    } else {
+      console.log("[gateway] Model OK (not 'auto'), no patch needed");
+    }
+  } catch (err) {
+    console.error(`[gateway] Model patch failed (non-fatal): ${err.message}`);
+  }
 
   const args = [
     "gateway",
@@ -660,16 +676,23 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.memory", "true"]));
       console.log("[onboard] ✓ Tools configured: sessions=true, memory=true");
 
-      // === MissionBound: Log OpenRouter model config after onboard ===
+      // === MissionBound: Patch model "auto" → kimi-k2.5 after OpenRouter onboard ===
       if (payload.authChoice === "openrouter-api-key") {
         try {
-          const cfg = JSON.parse(fs.readFileSync(configPath(), "utf8"));
-          const cfgStr = JSON.stringify(cfg);
-          const modelRefs = cfgStr.match(/"model"\s*:\s*"[^"]+"/g) || [];
-          console.log(`[onboard] OpenRouter model refs: ${modelRefs.join(", ")}`);
-          extra += `\n[openrouter] model refs: ${modelRefs.join(", ")}\n`;
+          const cfgRaw = fs.readFileSync(configPath(), "utf8");
+          const autoPattern = /"model"(\s*:\s*)"auto"/g;
+          if (autoPattern.test(cfgRaw)) {
+            const patched = cfgRaw.replace(/"model"(\s*:\s*)"auto"/g, '"model"$1"moonshotai/kimi-k2.5"');
+            fs.writeFileSync(configPath(), patched, "utf8");
+            console.log('[onboard] ✓ Model patched: "auto" → "moonshotai/kimi-k2.5"');
+            extra += '\n[openrouter] ✓ model patched to moonshotai/kimi-k2.5\n';
+          } else {
+            console.log("[onboard] Model already set (not 'auto')");
+            extra += "\n[openrouter] model already configured\n";
+          }
         } catch (err) {
-          extra += `\n[openrouter] model diagnostic: ${err.message}\n`;
+          console.error(`[onboard] Model patch failed: ${err.message}`);
+          extra += `\n[openrouter] model patch error: ${err.message}\n`;
         }
       }
 

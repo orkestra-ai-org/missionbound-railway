@@ -296,14 +296,14 @@ Aligné avec : SOUL.md (L3), VISION.md (L3 pour agents spécialisés autonomes)
 | `fs:read` | ✅ ON | workspace/ + skills/ uniquement |
 | `fs:write` | ⚠️ ON | memory/ uniquement (append-only) |
 | `browser` | ❌ OFF | Indisponible sur Railway (pas de Chrome) — utiliser `web_fetch` |
-| `exec` | ⚠️ ON | Restreint à `gh` CLI uniquement (github-reader skill) |
+| `exec` | ⚠️ ON | Restreint à `gh` et `curl` uniquement |
 | `github-reader` | ✅ ON | Lecture repos publics/privés via `gh` CLI + GITHUB_TOKEN |
 | `web_search` | ✅ ON | Autonome pour recherche |
 | `web_fetch` | ✅ ON | Autonome pour extraction |
 | `cron` | ✅ ON | Heartbeat 30min |
 | `message` | ✅ ON | Telegram/Slack (canaux dédiés) |
 | `github` | ✅ ON | PRs via orkestra-github (gate CEO) |
-| `notion` | ✅ ON | Read/Write Orkestra Team + MissionBound |
+| `notion` | ⚠️ VIA EXEC | Pas de tool natif — utiliser `exec` + `curl` contre l'API Notion |
 
 ---
 
@@ -400,7 +400,30 @@ gh issue list --repo jeancristof/missionbound --limit 10
 2. **Pour accéder à un repo GitHub privé** → `github-reader` skill (commandes `gh`)
 3. **Pour rechercher sur le web** → `web_search` si BRAVE_API_KEY configurée, sinon `web_fetch`
 4. **Jamais de `browser`** → échouera systématiquement (pas de Chrome installé)
-5. **`exec` limité à `gh`** → aucune autre commande shell autorisée
+5. **`exec` limité à `gh` et `curl`** → aucune autre commande shell autorisée
+6. **Pour écrire dans Notion** → `exec` + `curl` contre l'API Notion (voir Section 11.1)
+
+### 11.1 Notion via exec + curl
+
+OpenClaw n'a **PAS** de tool natif `notion`. Utiliser `exec` + `curl` :
+
+```bash
+# Créer une page dans la base de données CRM
+curl -X POST https://api.notion.com/v1/pages \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
+  -H "Content-Type: application/json" \
+  -d '{"parent":{"database_id":"'"$NOTION_DATABASE_ID"'"},"properties":{"Name":{"title":[{"text":{"content":"Lead Name"}}]}}}'
+
+# Lire une base de données
+curl -X POST https://api.notion.com/v1/databases/$NOTION_DATABASE_ID/query \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+**Variables d'environnement requises** : `NOTION_API_KEY`, `NOTION_DATABASE_ID`
 
 ---
 
