@@ -66,6 +66,7 @@ function isConfigured() {
 
 let gatewayProc = null;
 let gatewayStarting = null;
+let gatewayOutput = ""; // Capture gateway stdout/stderr for diagnostics
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -162,30 +163,28 @@ async function startGateway() {
   console.log(`[gateway] ========== GATEWAY START TOKEN SYNC ==========`);
   console.log(`[gateway] Syncing wrapper token to config: ${OPENCLAW_GATEWAY_TOKEN.slice(0, 16)}... (len: ${OPENCLAW_GATEWAY_TOKEN.length})`);
 
-  // === MissionBound: Clean up any corrupted config from previous deploys ===
-  // Previous versions wrote tools.exec as object and model.default/fallback as strings,
-  // which the gateway can't parse. Remove those keys so the gateway can start.
+  // === MissionBound: Aggressive config cleanup ===
+  // Previous deploys may have written fields in wrong types (tools.exec as object,
+  // model as object, agent.workspace as string) that crash the gateway.
+  // Strategy: keep ONLY known-safe top-level keys, delete everything else.
   try {
     const cfgPath = configPath();
     if (fs.existsSync(cfgPath)) {
       const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+      const safeKeys = new Set(["gateway", "channels", "env"]);
       let dirty = false;
-      // tools.exec must be boolean, not object
-      if (cfg.tools && typeof cfg.tools.exec === "object" && cfg.tools.exec !== null) {
-        delete cfg.tools.exec;
-        dirty = true;
-        console.log("[gateway] Removed corrupted tools.exec (was object)");
-      }
-      // model must be string, not object
-      if (cfg.model && typeof cfg.model === "object") {
-        delete cfg.model;
-        dirty = true;
-        console.log("[gateway] Removed corrupted model config (was object)");
+      for (const key of Object.keys(cfg)) {
+        if (!safeKeys.has(key)) {
+          console.log(`[gateway] Removing potentially corrupted config key: ${key} (type: ${typeof cfg[key]})`);
+          delete cfg[key];
+          dirty = true;
+        }
       }
       if (dirty) {
         fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
-        console.log("[gateway] Config cleaned up successfully");
+        console.log("[gateway] Config cleaned — kept only: gateway, channels, env");
       }
+      console.log(`[gateway] Config keys after cleanup: ${Object.keys(cfg).join(", ") || "(empty)"}`);
     }
   } catch (cleanupErr) {
     console.error(`[gateway] Config cleanup error (non-fatal): ${cleanupErr.message}`);
@@ -252,8 +251,10 @@ async function startGateway() {
     OPENCLAW_GATEWAY_TOKEN,
   ];
 
+  gatewayOutput = ""; // Reset output capture
+
   gatewayProc = childProcess.spawn(OPENCLAW_NODE, clawArgs(args), {
-    stdio: "inherit",
+    stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
       OPENCLAW_STATE_DIR: STATE_DIR,
@@ -266,13 +267,30 @@ async function startGateway() {
   console.log(`[gateway] WORKSPACE_DIR: ${WORKSPACE_DIR}`);
   console.log(`[gateway] config path: ${configPath()}`);
 
+  // Capture gateway output for diagnostics (also forward to parent stdout)
+  gatewayProc.stdout.on("data", (d) => {
+    const text = d.toString("utf8");
+    process.stdout.write(`[gw:out] ${text}`);
+    gatewayOutput += text;
+    // Keep last 10KB only
+    if (gatewayOutput.length > 10240) gatewayOutput = gatewayOutput.slice(-10240);
+  });
+  gatewayProc.stderr.on("data", (d) => {
+    const text = d.toString("utf8");
+    process.stderr.write(`[gw:err] ${text}`);
+    gatewayOutput += text;
+    if (gatewayOutput.length > 10240) gatewayOutput = gatewayOutput.slice(-10240);
+  });
+
   gatewayProc.on("error", (err) => {
     console.error(`[gateway] spawn error: ${String(err)}`);
+    gatewayOutput += `\n[SPAWN ERROR] ${String(err)}\n`;
     gatewayProc = null;
   });
 
   gatewayProc.on("exit", (code, signal) => {
     console.error(`[gateway] exited code=${code} signal=${signal}`);
+    gatewayOutput += `\n[EXIT] code=${code} signal=${signal}\n`;
     gatewayProc = null;
   });
 }
@@ -283,7 +301,7 @@ async function ensureGatewayRunning() {
   if (!gatewayStarting) {
     gatewayStarting = (async () => {
       await startGateway();
-      const ready = await waitForGatewayReady({ timeoutMs: 20_000 });
+      const ready = await waitForGatewayReady({ timeoutMs: 60_000 });
       if (!ready) {
         throw new Error("Gateway did not become ready in time");
       }
@@ -870,6 +888,13 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
     OPENCLAW_NODE,
     clawArgs(["channels", "add", "--help"]),
   );
+  // Read config keys (no values) for diagnostics
+  let configKeys = [];
+  try {
+    const cfg = JSON.parse(fs.readFileSync(configPath(), "utf8"));
+    configKeys = Object.keys(cfg);
+  } catch { /* ignore */ }
+
   res.json({
     wrapper: {
       node: process.version,
@@ -877,11 +902,13 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
       stateDir: STATE_DIR,
       workspaceDir: WORKSPACE_DIR,
       configPath: configPath(),
+      configKeys,
       gatewayTokenFromEnv: Boolean(process.env.OPENCLAW_GATEWAY_TOKEN?.trim()),
       gatewayTokenPersisted: fs.existsSync(
         path.join(STATE_DIR, "gateway.token"),
       ),
       railwayCommit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
+      gatewayPid: gatewayProc?.pid || null,
     },
     openclaw: {
       entry: OPENCLAW_ENTRY,
@@ -889,6 +916,7 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
       version: v.output.trim(),
       channelsAddHelpIncludesTelegram: help.output.includes("telegram"),
     },
+    gatewayOutput: gatewayOutput || "(no output)",
   });
 });
 
@@ -1054,10 +1082,29 @@ app.use(async (req, res) => {
     try {
       await ensureGatewayRunning();
     } catch (err) {
-      return res
-        .status(503)
-        .type("text/plain")
-        .send(`Gateway not ready: ${String(err)}`);
+      // Include gateway output and config (masked) for diagnostics
+      let diag = `Gateway not ready: ${String(err)}\n`;
+      diag += `\n--- Gateway Output (last 10KB) ---\n${gatewayOutput || "(no output captured)"}\n`;
+      try {
+        const cfg = JSON.parse(fs.readFileSync(configPath(), "utf8"));
+        // Mask sensitive values
+        const masked = JSON.parse(JSON.stringify(cfg));
+        if (masked.gateway?.auth?.token) masked.gateway.auth.token = "***";
+        if (masked.channels?.telegram?.botToken) masked.channels.telegram.botToken = "***";
+        if (masked.channels?.discord?.token) masked.channels.discord.token = "***";
+        if (masked.channels?.slack?.botToken) masked.channels.slack.botToken = "***";
+        if (masked.channels?.slack?.appToken) masked.channels.slack.appToken = "***";
+        // Mask any key containing "key", "token", "secret" at any depth
+        const maskDeep = (obj) => {
+          for (const [k, v] of Object.entries(obj)) {
+            if (typeof v === "string" && /key|token|secret/i.test(k)) obj[k] = "***";
+            else if (v && typeof v === "object") maskDeep(v);
+          }
+        };
+        maskDeep(masked);
+        diag += `\n--- Runtime Config (masked) ---\n${JSON.stringify(masked, null, 2)}\n`;
+      } catch { /* ignore */ }
+      return res.status(503).type("text/plain").send(diag);
     }
   }
 
