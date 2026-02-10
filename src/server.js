@@ -195,19 +195,14 @@ async function startGateway() {
 
   console.log(`[gateway] ========== TOKEN SYNC COMPLETE ==========`);
 
-  // === MissionBound: Ensure model is kimi-k2.5, not openrouter/auto ===
+  // === MissionBound: Log model config for diagnostics ===
   try {
     const cfgPath = configPath();
-    const cfgRaw = fs.readFileSync(cfgPath, "utf8");
-    if (cfgRaw.includes("openrouter/auto")) {
-      const patched = cfgRaw.replace(/openrouter\/auto/g, "openrouter/moonshotai/kimi-k2.5");
-      fs.writeFileSync(cfgPath, patched, "utf8");
-      console.log("[gateway] ✓ Model patched: openrouter/auto → openrouter/moonshotai/kimi-k2.5");
-    } else {
-      console.log("[gateway] Model OK (no openrouter/auto found)");
-    }
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+    const modelInfo = cfg?.agents?.defaults?.model || cfg?.model || "not found";
+    console.log(`[gateway] Model config: ${JSON.stringify(modelInfo)}`);
   } catch (err) {
-    console.error(`[gateway] Model patch failed (non-fatal): ${err.message}`);
+    console.error(`[gateway] Model diagnostic failed: ${err.message}`);
   }
 
   const args = [
@@ -687,20 +682,24 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.memory", "true"]));
       console.log("[onboard] ✓ Tools configured: sessions=true, memory=true");
 
-      // === MissionBound: Set OpenRouter model (onboard defaults to openrouter/auto) ===
+      // === MissionBound: Log OpenRouter model config for diagnostics ===
       if (payload.authChoice === "openrouter-api-key") {
         try {
           const cfgPath = configPath();
           const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-          // Find and replace openrouter/auto with kimi-k2.5 wherever model is set
+          const modelKeys = [];
+          // Search all possible model paths in config
+          if (cfg?.agents?.defaults?.model) modelKeys.push(`agents.defaults.model: ${JSON.stringify(cfg.agents.defaults.model)}`);
+          if (cfg?.model) modelKeys.push(`model: ${JSON.stringify(cfg.model)}`);
+          // Walk top-level keys looking for any model reference
           const cfgStr = JSON.stringify(cfg);
-          const patched = JSON.parse(cfgStr.replace(/openrouter\/auto/g, "openrouter/moonshotai/kimi-k2.5"));
-          fs.writeFileSync(cfgPath, JSON.stringify(patched, null, 2), "utf8");
-          console.log("[onboard] ✓ Model changed: openrouter/auto → openrouter/moonshotai/kimi-k2.5");
-          extra += "\n[openrouter] model: openrouter/moonshotai/kimi-k2.5 (was auto)\n";
+          const modelMatches = cfgStr.match(/"model"\s*:\s*"[^"]+"/g) || [];
+          const summary = `[onboard] Model config after OpenRouter onboard:\n  paths: ${modelKeys.join("; ") || "none found"}\n  all model refs: ${modelMatches.join(", ") || "none"}`;
+          console.log(summary);
+          extra += `\n${summary}\n`;
         } catch (err) {
-          console.error(`[onboard] Model patch failed: ${err.message}`);
-          extra += `\n[openrouter] model patch failed: ${err.message}\n`;
+          console.error(`[onboard] Model diagnostic failed: ${err.message}`);
+          extra += `\n[onboard] model diagnostic failed: ${err.message}\n`;
         }
       }
 
@@ -858,6 +857,21 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
     OPENCLAW_NODE,
     clawArgs(["channels", "add", "--help"]),
   );
+  // Read config to extract model info for diagnostics
+  let modelDiag = null;
+  try {
+    const cfg = JSON.parse(fs.readFileSync(configPath(), "utf8"));
+    const cfgStr = JSON.stringify(cfg);
+    const modelMatches = cfgStr.match(/"model"\s*:\s*"[^"]+"/g) || [];
+    modelDiag = {
+      configTopLevelKeys: Object.keys(cfg),
+      agentsDefaultsModel: cfg?.agents?.defaults?.model || null,
+      topLevelModel: cfg?.model || null,
+      allModelRefs: modelMatches,
+    };
+  } catch (e) {
+    modelDiag = { error: e.message };
+  }
   res.json({
     wrapper: {
       node: process.version,
@@ -877,6 +891,7 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
       version: v.output.trim(),
       channelsAddHelpIncludesTelegram: help.output.includes("telegram"),
     },
+    model: modelDiag,
   });
 });
 
