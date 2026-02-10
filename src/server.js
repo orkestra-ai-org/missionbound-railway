@@ -163,28 +163,36 @@ async function startGateway() {
   console.log(`[gateway] ========== GATEWAY START TOKEN SYNC ==========`);
   console.log(`[gateway] Syncing wrapper token to config: ${OPENCLAW_GATEWAY_TOKEN.slice(0, 16)}... (len: ${OPENCLAW_GATEWAY_TOKEN.length})`);
 
-  // === MissionBound: Aggressive config cleanup ===
-  // Previous deploys may have written fields in wrong types (tools.exec as object,
-  // model as object, agent.workspace as string) that crash the gateway.
-  // Strategy: keep ONLY known-safe top-level keys, delete everything else.
+  // === MissionBound: Targeted config cleanup ===
+  // Fix specific fields that were corrupted by previous JSON patching.
+  // Only remove keys we KNOW are wrong — leave everything else intact
+  // so auth credentials and model config survive redeploys.
   try {
     const cfgPath = configPath();
     if (fs.existsSync(cfgPath)) {
       const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-      const safeKeys = new Set(["gateway", "channels", "env"]);
       let dirty = false;
-      for (const key of Object.keys(cfg)) {
-        if (!safeKeys.has(key)) {
-          console.log(`[gateway] Removing potentially corrupted config key: ${key} (type: ${typeof cfg[key]})`);
-          delete cfg[key];
-          dirty = true;
-        }
+
+      // tools.exec must be boolean, not object
+      if (cfg.tools && typeof cfg.tools.exec === "object" && cfg.tools.exec !== null) {
+        delete cfg.tools.exec;
+        dirty = true;
+        console.log("[gateway] Fixed: removed tools.exec (was object, should be boolean)");
       }
+
+      // agent.workspace is not a valid OpenClaw config key — it was set by our
+      // old JSON patching code and may cause the gateway to reject the config.
+      if (cfg.agent && "workspace" in cfg.agent) {
+        delete cfg.agent.workspace;
+        dirty = true;
+        console.log("[gateway] Fixed: removed invalid agent.workspace key");
+      }
+
       if (dirty) {
         fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
-        console.log("[gateway] Config cleaned — kept only: gateway, channels, env");
+        console.log("[gateway] Config cleanup applied");
       }
-      console.log(`[gateway] Config keys after cleanup: ${Object.keys(cfg).join(", ") || "(empty)"}`);
+      console.log(`[gateway] Config keys: ${Object.keys(cfg).join(", ")}`);
     }
   } catch (cleanupErr) {
     console.error(`[gateway] Config cleanup error (non-fatal): ${cleanupErr.message}`);
