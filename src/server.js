@@ -198,19 +198,42 @@ async function startGateway() {
     console.error(`[gateway] Config cleanup error (non-fatal): ${cleanupErr.message}`);
   }
 
-  // === MissionBound: Re-apply safe config on every gateway start ===
-  // Only use proven `openclaw config set` keys. Do NOT patch JSON directly.
-  console.log("[gateway] Applying MissionBound config (safe subset)...");
-  await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agent.bootstrapMaxChars", "50000"]));
-  await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agent.skipBootstrap", "false"]));
-  await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.sessions", "true"]));
-  await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.memory", "true"]));
-  // Ensure model is set for OpenRouter (string value, not object — safe for config set)
+  // === MissionBound: Dump config structure for diagnostics ===
+  try {
+    const cfgPath = configPath();
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+    console.log(`[gateway] Runtime config top-level keys: ${Object.keys(cfg).join(", ")}`);
+    if (cfg.agents) {
+      console.log(`[gateway] agents keys: ${JSON.stringify(Object.keys(cfg.agents))}`);
+      // Dump agent structure (without secrets)
+      for (const [agentId, agentCfg] of Object.entries(cfg.agents)) {
+        if (typeof agentCfg === "object" && agentCfg !== null) {
+          console.log(`[gateway] agents.${agentId} keys: ${JSON.stringify(Object.keys(agentCfg))}`);
+          if (agentCfg.agent) console.log(`[gateway] agents.${agentId}.agent keys: ${JSON.stringify(Object.keys(agentCfg.agent))}`);
+          if (agentCfg.model) console.log(`[gateway] agents.${agentId}.model = ${JSON.stringify(agentCfg.model)}`);
+        }
+      }
+    }
+    if (cfg.meta) console.log(`[gateway] meta keys: ${JSON.stringify(Object.keys(cfg.meta))}`);
+    if (cfg.plugins) console.log(`[gateway] plugins keys: ${JSON.stringify(Object.keys(cfg.plugins))}`);
+  } catch (e) {
+    console.error(`[gateway] Config dump error: ${e.message}`);
+  }
+
+  // === MissionBound: Set model for OpenRouter ===
+  // OpenClaw 2026.2.9 config schema: model may be under `agents` not top-level.
+  // Try multiple approaches and log results.
   if (process.env.OPENROUTER_API_KEY) {
-    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "model", "moonshotai/kimi-k2.5"]));
-    console.log("[gateway] Config applied (bootstrap=50000, sessions+memory=true, model=kimi-k2.5)");
-  } else {
-    console.log("[gateway] Config applied (bootstrap=50000, sessions+memory=true)");
+    console.log("[gateway] OpenRouter detected — attempting to set model...");
+    const modelAttempts = [
+      ["config", "set", "model", "openrouter/moonshotai/kimi-k2.5"],
+      ["config", "set", "agents.main.model", "openrouter/moonshotai/kimi-k2.5"],
+      ["config", "set", "agents.main.agent.model", "openrouter/moonshotai/kimi-k2.5"],
+    ];
+    for (const args of modelAttempts) {
+      const r = await runCmd(OPENCLAW_NODE, clawArgs(args));
+      console.log(`[gateway] ${args.join(" ")} → exit=${r.code} output=${r.output.trim().slice(0, 200)}`);
+    }
   }
 
   const syncResult = await runCmd(
@@ -911,12 +934,29 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
     OPENCLAW_NODE,
     clawArgs(["channels", "add", "--help"]),
   );
-  // Read config keys (no values) for diagnostics
+  // Read full config (masked) for diagnostics
   let configKeys = [];
+  let configDump = {};
   try {
     const cfg = JSON.parse(fs.readFileSync(configPath(), "utf8"));
     configKeys = Object.keys(cfg);
+    // Deep copy and mask sensitive values
+    configDump = JSON.parse(JSON.stringify(cfg));
+    const maskDeep = (obj) => {
+      for (const [k, v] of Object.entries(obj)) {
+        if (typeof v === "string" && /key|token|secret|password|apiKey|botToken/i.test(k)) obj[k] = "***";
+        else if (v && typeof v === "object" && !Array.isArray(v)) maskDeep(v);
+      }
+    };
+    maskDeep(configDump);
   } catch { /* ignore */ }
+
+  // Get full config via CLI
+  const configGet = await runCmd(OPENCLAW_NODE, clawArgs(["config", "get"]));
+  // Get agents help
+  const agentsHelp = await runCmd(OPENCLAW_NODE, clawArgs(["agents", "--help"]));
+  // Get gateway run help
+  const gatewayRunHelp = await runCmd(OPENCLAW_NODE, clawArgs(["gateway", "run", "--help"]));
 
   res.json({
     wrapper: {
@@ -939,6 +979,10 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
       version: v.output.trim(),
       channelsAddHelpIncludesTelegram: help.output.includes("telegram"),
     },
+    configDump,
+    configGetOutput: configGet.output || "(no output)",
+    agentsHelp: agentsHelp.output || "(no output)",
+    gatewayRunHelp: gatewayRunHelp.output || "(no output)",
     gatewayOutput: gatewayOutput || "(no output)",
   });
 });
