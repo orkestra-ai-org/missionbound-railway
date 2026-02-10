@@ -144,6 +144,15 @@ async function startGateway() {
   console.log(`[gateway] ========== GATEWAY START TOKEN SYNC ==========`);
   console.log(`[gateway] Syncing wrapper token to config: ${OPENCLAW_GATEWAY_TOKEN.slice(0, 16)}... (len: ${OPENCLAW_GATEWAY_TOKEN.length})`);
 
+  // === MissionBound: Re-apply critical config on every gateway start ===
+  // This ensures push → redeploy picks up config changes without manual reset.
+  console.log("[gateway] Applying MissionBound config settings...");
+  await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agent.bootstrapMaxChars", "50000"]));
+  await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agent.skipBootstrap", "false"]));
+  await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.sessions", "true"]));
+  await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.memory", "true"]));
+  console.log("[gateway] ✓ MissionBound config applied (bootstrap, sessions, memory)");
+
   const syncResult = await runCmd(
     OPENCLAW_NODE,
     clawArgs(["config", "set", "gateway.auth.token", OPENCLAW_GATEWAY_TOKEN]),
