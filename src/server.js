@@ -792,6 +792,21 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
         extra += "\n[atlas] configured Atlas Cloud with OpenAI-compatible endpoint (provider: openai, model: minimaxai/minimax-m2.1)\n";
       }
 
+      // Configure OpenRouter model if selected
+      // OpenClaw 2026.2.9 defaults to anthropic/claude-opus-4-6.
+      // Model must be set at agents.defaults.model.primary (per docs.openclaw.ai)
+      if (payload.authChoice === "openrouter-api-key") {
+        const modelCfg = JSON.stringify({
+          primary: "openrouter/moonshotai/kimi-k2.5",
+          fallbacks: ["openrouter/deepseek/deepseek-chat-v3"]
+        });
+        await runCmd(
+          OPENCLAW_NODE,
+          clawArgs(["config", "set", "--json", "agents.defaults.model", modelCfg]),
+        );
+        extra += "\n[openrouter] configured model: openrouter/moonshotai/kimi-k2.5\n";
+      }
+
       // Apply changes immediately.
       await restartGateway();
     }
