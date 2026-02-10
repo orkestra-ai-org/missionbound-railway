@@ -103,37 +103,49 @@ async function startGateway() {
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 
   // Sync MissionBound workspace files from image to volume.
-  // Always overwrite .md files to ensure latest personality is loaded.
-  // Also remove stale files from volume that are no longer in the image.
+  // Recursive sync: overwrites ALL files EXCEPT memory/ (agent-generated).
+  // This ensures skill updates and bootstrap file changes deploy on every redeploy.
   const imageWorkspaceDir = "/root/.openclaw/workspace";
   if (fs.existsSync(imageWorkspaceDir)) {
-    const imageFiles = new Set(fs.readdirSync(imageWorkspaceDir));
-    // Copy/overwrite all files from image to volume
-    for (const file of imageFiles) {
-      const srcPath = path.join(imageWorkspaceDir, file);
-      const destPath = path.join(WORKSPACE_DIR, file);
-      const isDir = fs.statSync(srcPath).isDirectory();
-      if (isDir) {
-        // For directories (skills/, memory/), copy if not present
-        if (!fs.existsSync(destPath)) {
-          fs.cpSync(srcPath, destPath, { recursive: true });
-          console.log(`[setup] Copied directory ${file} to workspace`);
+    function syncDir(src, dest, relPath) {
+      fs.mkdirSync(dest, { recursive: true });
+      const entries = fs.readdirSync(src, { withFileTypes: true });
+      for (const entry of entries) {
+        const srcPath = path.join(src, entry.name);
+        const destPath = path.join(dest, entry.name);
+        const entryRelPath = relPath ? `${relPath}/${entry.name}` : entry.name;
+        // Skip memory/ directory — agent-generated, must persist across redeploys
+        if (entry.name === "memory" && entry.isDirectory() && !relPath) {
+          console.log(`[sync] Skipped memory/ (agent-generated, preserved)`);
+          continue;
         }
-      } else {
-        // For files (.md, .json), always overwrite to pick up changes
-        fs.cpSync(srcPath, destPath, { recursive: true });
-        console.log(`[setup] Synced ${file} to workspace`);
+        if (entry.isDirectory()) {
+          syncDir(srcPath, destPath, entryRelPath);
+        } else {
+          // Skip MEMORY.md at workspace root — agent-generated
+          if (entry.name === "MEMORY.md" && !relPath) {
+            if (fs.existsSync(destPath)) {
+              console.log(`[sync] Skipped MEMORY.md (agent-generated, preserved)`);
+              continue;
+            }
+            // First deploy: copy initial MEMORY.md
+          }
+          fs.cpSync(srcPath, destPath);
+          console.log(`[sync] Synced ${entryRelPath}`);
+        }
       }
     }
-    // Remove stale .md files from volume that are no longer in the image
-    // (e.g., IDENTITY.md, DEPLOY.md removed to fix personality conflict)
+    syncDir(imageWorkspaceDir, WORKSPACE_DIR, "");
+
+    // Remove stale .md files from volume root that are no longer in the image
+    const imageFiles = new Set(fs.readdirSync(imageWorkspaceDir));
     const volumeFiles = fs.readdirSync(WORKSPACE_DIR);
     for (const file of volumeFiles) {
-      if (file.endsWith(".md") && !imageFiles.has(file)) {
+      if (file.endsWith(".md") && !imageFiles.has(file) && file !== "MEMORY.md") {
         const stalePath = path.join(WORKSPACE_DIR, file);
         if (fs.statSync(stalePath).isFile()) {
           fs.rmSync(stalePath);
-          console.log(`[setup] Removed stale file ${file} from workspace`);
+          console.log(`[sync] Removed stale file ${file} from workspace`);
         }
       }
     }
@@ -182,6 +194,21 @@ async function startGateway() {
   }
 
   console.log(`[gateway] ========== TOKEN SYNC COMPLETE ==========`);
+
+  // === MissionBound: Ensure model is kimi-k2.5, not openrouter/auto ===
+  try {
+    const cfgPath = configPath();
+    const cfgRaw = fs.readFileSync(cfgPath, "utf8");
+    if (cfgRaw.includes("openrouter/auto")) {
+      const patched = cfgRaw.replace(/openrouter\/auto/g, "openrouter/moonshotai/kimi-k2.5");
+      fs.writeFileSync(cfgPath, patched, "utf8");
+      console.log("[gateway] ✓ Model patched: openrouter/auto → openrouter/moonshotai/kimi-k2.5");
+    } else {
+      console.log("[gateway] Model OK (no openrouter/auto found)");
+    }
+  } catch (err) {
+    console.error(`[gateway] Model patch failed (non-fatal): ${err.message}`);
+  }
 
   const args = [
     "gateway",
