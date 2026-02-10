@@ -866,6 +866,53 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
   });
 });
 
+// List session files for recovery (read-only diagnostic endpoint)
+app.get("/setup/api/sessions", requireSetupAuth, (_req, res) => {
+  const sessionsDir = path.join(STATE_DIR, "sessions");
+  try {
+    if (!fs.existsSync(sessionsDir)) {
+      return res.json({ found: false, message: "No sessions directory found", path: sessionsDir });
+    }
+    const files = [];
+    function walk(dir, prefix) {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) {
+          walk(full, rel);
+        } else {
+          const stat = fs.statSync(full);
+          files.push({ path: rel, size: stat.size, modified: stat.mtime.toISOString() });
+        }
+      }
+    }
+    walk(sessionsDir, "");
+    return res.json({ found: true, count: files.length, sessionsDir, files });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// Read a specific session file content for recovery
+app.get("/setup/api/sessions/:filename(*)", requireSetupAuth, (req, res) => {
+  const sessionsDir = path.join(STATE_DIR, "sessions");
+  const filePath = path.join(sessionsDir, req.params.filename);
+  // Security: ensure path stays within sessions dir
+  if (!filePath.startsWith(sessionsDir)) {
+    return res.status(403).json({ error: "Access denied" });
+  }
+  try {
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "Session file not found" });
+    }
+    const content = fs.readFileSync(filePath, "utf8");
+    res.type("application/json").send(content);
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
 app.post("/setup/api/pairing/approve", requireSetupAuth, async (req, res) => {
   const { channel, code } = req.body || {};
   if (!channel || !code) {
