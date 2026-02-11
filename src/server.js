@@ -192,7 +192,7 @@ async function startGateway() {
 
     console.log(`[gateway] ========== MODEL PATCH ==========`);
 
-    const TARGET_MODEL = "moonshotai/kimi-k2.5";
+    const TARGET_MODEL = "openrouter/moonshotai/kimi-k2.5";
     let changed = false;
 
     // Ensure agents.defaults exists
@@ -724,7 +724,7 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       // Config structure: agents.defaults.model = {primary: "openrouter/auto"}
       if (payload.authChoice === "openrouter-api-key") {
         try {
-          const TARGET = "moonshotai/kimi-k2.5";
+          const TARGET = "openrouter/moonshotai/kimi-k2.5";
           const cfg = JSON.parse(fs.readFileSync(configPath(), "utf8"));
           if (!cfg.agents) cfg.agents = {};
           if (!cfg.agents.defaults) cfg.agents.defaults = {};
