@@ -182,7 +182,7 @@ async function startGateway() {
 
   console.log(`[gateway] ========== TOKEN SYNC COMPLETE ==========`);
 
-  // === MissionBound: Ensure model is DeepSeek V3, not "auto" ===
+  // === MissionBound: Ensure model is Kimi K2.5, not "auto" ===
   // Config structure: agents.defaults.model = {primary: "openrouter/auto"}
   //                   agents.defaults.models = {"openrouter/auto": {alias: "OpenRouter"}}
   try {
@@ -192,7 +192,7 @@ async function startGateway() {
 
     console.log(`[gateway] ========== MODEL PATCH ==========`);
 
-    const TARGET_MODEL = "openrouter/deepseek/deepseek-chat-v3-0324";
+    const TARGET_MODEL = "openrouter/moonshotai/kimi-k2.5";
     let changed = false;
 
     // Ensure agents.defaults exists
@@ -225,9 +225,19 @@ async function startGateway() {
     // Update models map
     if (!defaults.models) defaults.models = {};
     if (!defaults.models[TARGET_MODEL]) {
-      defaults.models[TARGET_MODEL] = { alias: "DeepSeek V3" };
+      defaults.models[TARGET_MODEL] = { alias: "Kimi K2.5" };
       changed = true;
       console.log(`[gateway] ✓ Added ${TARGET_MODEL} to models map`);
+    }
+
+    // === Disable thinking mode (critical for Kimi K2.5) ===
+    // Kimi returns content:null when thinking is enabled because it uses
+    // all output tokens for reasoning_tokens. thinkingDefault:"off" forces
+    // Kimi to return normal content instead of reasoning-only output.
+    if (defaults.thinkingDefault !== "off") {
+      defaults.thinkingDefault = "off";
+      changed = true;
+      console.log(`[gateway] ✓ Set thinkingDefault: "off" (required for Kimi K2.5)`);
     }
 
     // === Fix trustedProxies so gateway treats proxy connections as local ===
@@ -728,11 +738,11 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.memory", "true"]));
       console.log("[onboard] ✓ Tools configured: sessions=true, memory=true");
 
-      // === MissionBound: Patch model to DeepSeek V3 after OpenRouter onboard ===
+      // === MissionBound: Patch model to Kimi K2.5 after OpenRouter onboard ===
       // Config structure: agents.defaults.model = {primary: "openrouter/auto"}
       if (payload.authChoice === "openrouter-api-key") {
         try {
-          const TARGET = "openrouter/deepseek/deepseek-chat-v3-0324";
+          const TARGET = "openrouter/moonshotai/kimi-k2.5";
           const cfg = JSON.parse(fs.readFileSync(configPath(), "utf8"));
           if (!cfg.agents) cfg.agents = {};
           if (!cfg.agents.defaults) cfg.agents.defaults = {};
@@ -744,7 +754,10 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
             d.model = { primary: TARGET };
           }
           if (!d.models) d.models = {};
-          d.models[TARGET] = { alias: "DeepSeek V3" };
+          d.models[TARGET] = { alias: "Kimi K2.5" };
+
+          // Disable thinking mode — Kimi returns content:null when thinking is enabled
+          d.thinkingDefault = "off";
 
           fs.writeFileSync(configPath(), JSON.stringify(cfg, null, 2), "utf8");
           console.log(`[onboard] ✓ Model set to ${TARGET}`);
@@ -942,9 +955,9 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "deepseek/deepseek-chat-v3-0324",
+          model: "moonshotai/kimi-k2.5",
           messages: [{ role: "user", content: "Say hello in one word." }],
-          max_tokens: 100,
+          max_tokens: 4096,
         }),
       });
       const testJson = await testRes.json();
