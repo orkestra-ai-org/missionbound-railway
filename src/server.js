@@ -186,17 +186,103 @@ async function startGateway() {
   try {
     const cfgPath = configPath();
     const cfgRaw = fs.readFileSync(cfgPath, "utf8");
-    // Match "model": "auto" (the value OpenClaw stores after OpenRouter onboard)
-    const autoPattern = /"model"(\s*:\s*)"auto"/g;
-    if (autoPattern.test(cfgRaw)) {
+
+    // Diagnostic: log all model references found in config
+    const modelRefs = cfgRaw.match(/"model"\s*:\s*"[^"]*"/g) || [];
+    console.log(`[gateway] ========== MODEL PATCH ==========`);
+    console.log(`[gateway] Config path: ${cfgPath}`);
+    console.log(`[gateway] Config size: ${cfgRaw.length} chars`);
+    console.log(`[gateway] Model refs found: ${modelRefs.length ? modelRefs.join(" | ") : "NONE"}`);
+
+    // Log config top-level keys for debugging
+    try {
+      const cfgObj = JSON.parse(cfgRaw);
+      console.log(`[gateway] Config top keys: ${Object.keys(cfgObj).join(", ")}`);
+      // Log agents section structure
+      if (cfgObj.agents) {
+        console.log(`[gateway] agents keys: ${Object.keys(cfgObj.agents).join(", ")}`);
+        if (cfgObj.agents.defaults) {
+          console.log(`[gateway] agents.defaults: ${JSON.stringify(cfgObj.agents.defaults)}`);
+        }
+      }
+    } catch (_) {}
+
+    // Approach 1: Regex replacement of "model": "auto"
+    if (/"model"\s*:\s*"auto"/.test(cfgRaw)) {
       const patched = cfgRaw.replace(/"model"(\s*:\s*)"auto"/g, '"model"$1"moonshotai/kimi-k2.5"');
       fs.writeFileSync(cfgPath, patched, "utf8");
-      console.log('[gateway] ✓ Model patched: "auto" → "moonshotai/kimi-k2.5"');
+      console.log('[gateway] ✓ Model patched via regex: "auto" → "moonshotai/kimi-k2.5"');
     } else {
-      console.log("[gateway] Model OK (not 'auto'), no patch needed");
+      console.log("[gateway] No 'model':'auto' found in config — injecting model into JSON");
+      // Approach 2: Parse JSON and inject model at all likely locations
+      const cfg = JSON.parse(cfgRaw);
+
+      // Inject into agents.defaults.model
+      if (!cfg.agents) cfg.agents = {};
+      if (typeof cfg.agents === "object" && !Array.isArray(cfg.agents)) {
+        if (!cfg.agents.defaults) cfg.agents.defaults = {};
+        cfg.agents.defaults.model = "moonshotai/kimi-k2.5";
+        console.log("[gateway] Injected agents.defaults.model");
+
+        // Also inject into any named agent entries that exist
+        for (const [key, val] of Object.entries(cfg.agents)) {
+          if (key !== "defaults" && val && typeof val === "object" && !Array.isArray(val)) {
+            val.model = "moonshotai/kimi-k2.5";
+            console.log(`[gateway] Injected agents.${key}.model`);
+          }
+        }
+      }
+
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
+      console.log("[gateway] ✓ Config saved with injected model");
     }
+
+    // Verify final state
+    const cfgAfter = fs.readFileSync(cfgPath, "utf8");
+    const refsAfter = cfgAfter.match(/"model"\s*:\s*"[^"]*"/g) || [];
+    console.log(`[gateway] Model refs AFTER patch: ${refsAfter.join(" | ")}`);
+    console.log(`[gateway] ========== MODEL PATCH END ==========`);
   } catch (err) {
     console.error(`[gateway] Model patch failed (non-fatal): ${err.message}`);
+  }
+
+  // Approach 3: Try openclaw config set for model-related keys (belt + suspenders)
+  const modelKeys = [
+    "agents.defaults.model",
+    "sessions.defaults.model",
+    "model",
+  ];
+  for (const key of modelKeys) {
+    try {
+      const res = childProcess.spawnSync(OPENCLAW_NODE, clawArgs(["config", "set", key, "moonshotai/kimi-k2.5"]), {
+        env: { ...process.env, OPENCLAW_STATE_DIR: STATE_DIR },
+        timeout: 5000,
+      });
+      const out = (res.stdout || "").toString().trim();
+      const err = (res.stderr || "").toString().trim();
+      console.log(`[gateway] config set ${key}: ${out || err || `exit ${res.status}`}`);
+    } catch (e) {
+      console.log(`[gateway] config set ${key}: ${e.message}`);
+    }
+  }
+
+  // Check if gateway run supports --model flag
+  let gatewaySupportsModel = false;
+  try {
+    const helpRes = childProcess.spawnSync(OPENCLAW_NODE, clawArgs(["gateway", "run", "--help"]), {
+      env: { ...process.env, OPENCLAW_STATE_DIR: STATE_DIR },
+      timeout: 5000,
+    });
+    const helpText = (helpRes.stdout || "").toString() + (helpRes.stderr || "").toString();
+    gatewaySupportsModel = helpText.includes("--model");
+    console.log(`[gateway] gateway run --help: ${gatewaySupportsModel ? "HAS --model flag" : "no --model flag"}`);
+    if (!gatewaySupportsModel) {
+      // Log available flags for debugging
+      const flags = helpText.match(/--\w[\w-]*/g) || [];
+      console.log(`[gateway] Available flags: ${flags.join(", ")}`);
+    }
+  } catch (e) {
+    console.log(`[gateway] help check failed: ${e.message}`);
   }
 
   const args = [
@@ -212,12 +298,21 @@ async function startGateway() {
     OPENCLAW_GATEWAY_TOKEN,
   ];
 
+  // If --model is supported, add it to force the model
+  if (gatewaySupportsModel) {
+    args.push("--model", "moonshotai/kimi-k2.5");
+    console.log("[gateway] Added --model moonshotai/kimi-k2.5 to gateway args");
+  }
+
   gatewayProc = childProcess.spawn(OPENCLAW_NODE, clawArgs(args), {
     stdio: "inherit",
     env: {
       ...process.env,
       OPENCLAW_STATE_DIR: STATE_DIR,
       OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
+      // Try env-based model override (speculative — may or may not be read by gateway)
+      OPENCLAW_MODEL: "moonshotai/kimi-k2.5",
+      OPENCLAW_DEFAULT_MODEL: "moonshotai/kimi-k2.5",
     },
   });
 
@@ -850,6 +945,15 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
     OPENCLAW_NODE,
     clawArgs(["channels", "add", "--help"]),
   );
+  // Read config file for diagnostics
+  let configContent = null;
+  let configModelRefs = [];
+  try {
+    const cfgRaw = fs.readFileSync(configPath(), "utf8");
+    configContent = JSON.parse(cfgRaw);
+    configModelRefs = cfgRaw.match(/"model"\s*:\s*"[^"]*"/g) || [];
+  } catch (_) {}
+
   res.json({
     wrapper: {
       node: process.version,
@@ -868,6 +972,13 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
       node: OPENCLAW_NODE,
       version: v.output.trim(),
       channelsAddHelpIncludesTelegram: help.output.includes("telegram"),
+    },
+    config: {
+      topLevelKeys: configContent ? Object.keys(configContent) : null,
+      modelRefs: configModelRefs,
+      agents: configContent?.agents || null,
+      sessions: configContent?.sessions || null,
+      meta: configContent?.meta || null,
     },
   });
 });
