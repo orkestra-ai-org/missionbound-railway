@@ -230,6 +230,14 @@ async function startGateway() {
       console.log(`[gateway] ✓ Added ${TARGET_MODEL} to models map`);
     }
 
+    // === Fix trustedProxies so gateway treats proxy connections as local ===
+    if (!cfg.gateway) cfg.gateway = {};
+    if (!cfg.gateway.trustedProxies || !cfg.gateway.trustedProxies.includes("127.0.0.1")) {
+      cfg.gateway.trustedProxies = ["127.0.0.1", "::1"];
+      changed = true;
+      console.log("[gateway] ✓ Set trustedProxies: [127.0.0.1, ::1]");
+    }
+
     if (changed) {
       fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
       console.log("[gateway] ✓ Config saved");
@@ -910,6 +918,48 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
     configModelRefs = cfgRaw.match(/"model"\s*:\s*"[^"]*"/g) || [];
   } catch (_) {}
 
+  // Read last 50 lines of OpenClaw log for errors
+  let recentLogs = null;
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const logPath = `/tmp/openclaw/openclaw-${today}.log`;
+    if (fs.existsSync(logPath)) {
+      const logContent = fs.readFileSync(logPath, "utf8");
+      const lines = logContent.split("\n");
+      recentLogs = lines.slice(-50).join("\n");
+    }
+  } catch (_) {}
+
+  // Test OpenRouter API directly
+  let openrouterTest = null;
+  const orKey = process.env.OPENROUTER_API_KEY;
+  if (orKey) {
+    try {
+      const testRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${orKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "moonshotai/kimi-k2.5",
+          messages: [{ role: "user", content: "Say hello in one word." }],
+          max_tokens: 10,
+        }),
+      });
+      const testJson = await testRes.json();
+      openrouterTest = {
+        status: testRes.status,
+        model: testJson.model || null,
+        content: testJson.choices?.[0]?.message?.content || null,
+        error: testJson.error || null,
+        usage: testJson.usage || null,
+      };
+    } catch (e) {
+      openrouterTest = { error: e.message };
+    }
+  }
+
   res.json({
     wrapper: {
       node: process.version,
@@ -933,9 +983,12 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
       topLevelKeys: configContent ? Object.keys(configContent) : null,
       modelRefs: configModelRefs,
       agents: configContent?.agents || null,
+      gateway: configContent?.gateway || null,
       sessions: configContent?.sessions || null,
       meta: configContent?.meta || null,
     },
+    openrouterTest,
+    recentLogs,
   });
 });
 
