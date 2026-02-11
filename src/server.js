@@ -183,106 +183,64 @@ async function startGateway() {
   console.log(`[gateway] ========== TOKEN SYNC COMPLETE ==========`);
 
   // === MissionBound: Ensure model is kimi-k2.5, not "auto" ===
+  // Config structure: agents.defaults.model = {primary: "openrouter/auto"}
+  //                   agents.defaults.models = {"openrouter/auto": {alias: "OpenRouter"}}
   try {
     const cfgPath = configPath();
     const cfgRaw = fs.readFileSync(cfgPath, "utf8");
+    const cfg = JSON.parse(cfgRaw);
 
-    // Diagnostic: log all model references found in config
-    const modelRefs = cfgRaw.match(/"model"\s*:\s*"[^"]*"/g) || [];
     console.log(`[gateway] ========== MODEL PATCH ==========`);
-    console.log(`[gateway] Config path: ${cfgPath}`);
-    console.log(`[gateway] Config size: ${cfgRaw.length} chars`);
-    console.log(`[gateway] Model refs found: ${modelRefs.length ? modelRefs.join(" | ") : "NONE"}`);
 
-    // Log config top-level keys for debugging
-    try {
-      const cfgObj = JSON.parse(cfgRaw);
-      console.log(`[gateway] Config top keys: ${Object.keys(cfgObj).join(", ")}`);
-      // Log agents section structure
-      if (cfgObj.agents) {
-        console.log(`[gateway] agents keys: ${Object.keys(cfgObj.agents).join(", ")}`);
-        if (cfgObj.agents.defaults) {
-          console.log(`[gateway] agents.defaults: ${JSON.stringify(cfgObj.agents.defaults)}`);
-        }
+    const TARGET_MODEL = "moonshotai/kimi-k2.5";
+    let changed = false;
+
+    // Ensure agents.defaults exists
+    if (!cfg.agents) cfg.agents = {};
+    if (!cfg.agents.defaults) cfg.agents.defaults = {};
+    const defaults = cfg.agents.defaults;
+
+    // Fix model.primary
+    if (defaults.model && typeof defaults.model === "object") {
+      // Normal case: model is an object like {primary: "openrouter/auto"}
+      const current = defaults.model.primary;
+      console.log(`[gateway] Current model.primary: ${current}`);
+      if (current !== TARGET_MODEL) {
+        defaults.model.primary = TARGET_MODEL;
+        changed = true;
+        console.log(`[gateway] ✓ model.primary: ${current} → ${TARGET_MODEL}`);
       }
-    } catch (_) {}
-
-    // Approach 1: Regex replacement of "model": "auto"
-    if (/"model"\s*:\s*"auto"/.test(cfgRaw)) {
-      const patched = cfgRaw.replace(/"model"(\s*:\s*)"auto"/g, '"model"$1"moonshotai/kimi-k2.5"');
-      fs.writeFileSync(cfgPath, patched, "utf8");
-      console.log('[gateway] ✓ Model patched via regex: "auto" → "moonshotai/kimi-k2.5"');
+    } else if (typeof defaults.model === "string") {
+      // Recovery: our previous code corrupted this to a string — restore object format
+      console.log(`[gateway] model was corrupted to string "${defaults.model}" — restoring object`);
+      defaults.model = { primary: TARGET_MODEL };
+      changed = true;
     } else {
-      console.log("[gateway] No 'model':'auto' found in config — injecting model into JSON");
-      // Approach 2: Parse JSON and inject model at all likely locations
-      const cfg = JSON.parse(cfgRaw);
-
-      // Inject into agents.defaults.model
-      if (!cfg.agents) cfg.agents = {};
-      if (typeof cfg.agents === "object" && !Array.isArray(cfg.agents)) {
-        if (!cfg.agents.defaults) cfg.agents.defaults = {};
-        cfg.agents.defaults.model = "moonshotai/kimi-k2.5";
-        console.log("[gateway] Injected agents.defaults.model");
-
-        // Also inject into any named agent entries that exist
-        for (const [key, val] of Object.entries(cfg.agents)) {
-          if (key !== "defaults" && val && typeof val === "object" && !Array.isArray(val)) {
-            val.model = "moonshotai/kimi-k2.5";
-            console.log(`[gateway] Injected agents.${key}.model`);
-          }
-        }
-      }
-
-      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
-      console.log("[gateway] ✓ Config saved with injected model");
+      // No model at all — create it
+      console.log("[gateway] No model found — creating");
+      defaults.model = { primary: TARGET_MODEL };
+      changed = true;
     }
 
-    // Verify final state
-    const cfgAfter = fs.readFileSync(cfgPath, "utf8");
-    const refsAfter = cfgAfter.match(/"model"\s*:\s*"[^"]*"/g) || [];
-    console.log(`[gateway] Model refs AFTER patch: ${refsAfter.join(" | ")}`);
+    // Update models map
+    if (!defaults.models) defaults.models = {};
+    if (!defaults.models[TARGET_MODEL]) {
+      defaults.models[TARGET_MODEL] = { alias: "Kimi K2.5" };
+      changed = true;
+      console.log(`[gateway] ✓ Added ${TARGET_MODEL} to models map`);
+    }
+
+    if (changed) {
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
+      console.log("[gateway] ✓ Config saved");
+    } else {
+      console.log("[gateway] Model already correct, no changes needed");
+    }
+
+    console.log(`[gateway] Final model.primary: ${cfg.agents.defaults.model?.primary}`);
     console.log(`[gateway] ========== MODEL PATCH END ==========`);
   } catch (err) {
     console.error(`[gateway] Model patch failed (non-fatal): ${err.message}`);
-  }
-
-  // Approach 3: Try openclaw config set for model-related keys (belt + suspenders)
-  const modelKeys = [
-    "agents.defaults.model",
-    "sessions.defaults.model",
-    "model",
-  ];
-  for (const key of modelKeys) {
-    try {
-      const res = childProcess.spawnSync(OPENCLAW_NODE, clawArgs(["config", "set", key, "moonshotai/kimi-k2.5"]), {
-        env: { ...process.env, OPENCLAW_STATE_DIR: STATE_DIR },
-        timeout: 5000,
-      });
-      const out = (res.stdout || "").toString().trim();
-      const err = (res.stderr || "").toString().trim();
-      console.log(`[gateway] config set ${key}: ${out || err || `exit ${res.status}`}`);
-    } catch (e) {
-      console.log(`[gateway] config set ${key}: ${e.message}`);
-    }
-  }
-
-  // Check if gateway run supports --model flag
-  let gatewaySupportsModel = false;
-  try {
-    const helpRes = childProcess.spawnSync(OPENCLAW_NODE, clawArgs(["gateway", "run", "--help"]), {
-      env: { ...process.env, OPENCLAW_STATE_DIR: STATE_DIR },
-      timeout: 5000,
-    });
-    const helpText = (helpRes.stdout || "").toString() + (helpRes.stderr || "").toString();
-    gatewaySupportsModel = helpText.includes("--model");
-    console.log(`[gateway] gateway run --help: ${gatewaySupportsModel ? "HAS --model flag" : "no --model flag"}`);
-    if (!gatewaySupportsModel) {
-      // Log available flags for debugging
-      const flags = helpText.match(/--\w[\w-]*/g) || [];
-      console.log(`[gateway] Available flags: ${flags.join(", ")}`);
-    }
-  } catch (e) {
-    console.log(`[gateway] help check failed: ${e.message}`);
   }
 
   const args = [
@@ -298,21 +256,12 @@ async function startGateway() {
     OPENCLAW_GATEWAY_TOKEN,
   ];
 
-  // If --model is supported, add it to force the model
-  if (gatewaySupportsModel) {
-    args.push("--model", "moonshotai/kimi-k2.5");
-    console.log("[gateway] Added --model moonshotai/kimi-k2.5 to gateway args");
-  }
-
   gatewayProc = childProcess.spawn(OPENCLAW_NODE, clawArgs(args), {
     stdio: "inherit",
     env: {
       ...process.env,
       OPENCLAW_STATE_DIR: STATE_DIR,
       OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
-      // Try env-based model override (speculative — may or may not be read by gateway)
-      OPENCLAW_MODEL: "moonshotai/kimi-k2.5",
-      OPENCLAW_DEFAULT_MODEL: "moonshotai/kimi-k2.5",
     },
   });
 
@@ -771,20 +720,27 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.memory", "true"]));
       console.log("[onboard] ✓ Tools configured: sessions=true, memory=true");
 
-      // === MissionBound: Patch model "auto" → kimi-k2.5 after OpenRouter onboard ===
+      // === MissionBound: Patch model to kimi-k2.5 after OpenRouter onboard ===
+      // Config structure: agents.defaults.model = {primary: "openrouter/auto"}
       if (payload.authChoice === "openrouter-api-key") {
         try {
-          const cfgRaw = fs.readFileSync(configPath(), "utf8");
-          const autoPattern = /"model"(\s*:\s*)"auto"/g;
-          if (autoPattern.test(cfgRaw)) {
-            const patched = cfgRaw.replace(/"model"(\s*:\s*)"auto"/g, '"model"$1"moonshotai/kimi-k2.5"');
-            fs.writeFileSync(configPath(), patched, "utf8");
-            console.log('[onboard] ✓ Model patched: "auto" → "moonshotai/kimi-k2.5"');
-            extra += '\n[openrouter] ✓ model patched to moonshotai/kimi-k2.5\n';
+          const TARGET = "moonshotai/kimi-k2.5";
+          const cfg = JSON.parse(fs.readFileSync(configPath(), "utf8"));
+          if (!cfg.agents) cfg.agents = {};
+          if (!cfg.agents.defaults) cfg.agents.defaults = {};
+          const d = cfg.agents.defaults;
+
+          if (d.model && typeof d.model === "object") {
+            d.model.primary = TARGET;
           } else {
-            console.log("[onboard] Model already set (not 'auto')");
-            extra += "\n[openrouter] model already configured\n";
+            d.model = { primary: TARGET };
           }
+          if (!d.models) d.models = {};
+          d.models[TARGET] = { alias: "Kimi K2.5" };
+
+          fs.writeFileSync(configPath(), JSON.stringify(cfg, null, 2), "utf8");
+          console.log(`[onboard] ✓ Model set to ${TARGET}`);
+          extra += `\n[openrouter] ✓ model set to ${TARGET}\n`;
         } catch (err) {
           console.error(`[onboard] Model patch failed: ${err.message}`);
           extra += `\n[openrouter] model patch error: ${err.message}\n`;
