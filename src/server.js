@@ -102,33 +102,34 @@ async function startGateway() {
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 
-  // Sync MissionBound workspace files from image to volume (recursive).
-  // Overwrites all files EXCEPT memory/ dir and MEMORY.md (agent-generated).
+  // Sync MissionBound workspace files from image to volume.
+  // Always overwrite .md files to ensure latest personality is loaded.
+  // Also remove stale files from volume that are no longer in the image.
   const imageWorkspaceDir = "/root/.openclaw/workspace";
-  function syncDir(src, dest, relPath) {
-    fs.mkdirSync(dest, { recursive: true });
-    const entries = fs.readdirSync(src, { withFileTypes: true });
-    for (const entry of entries) {
-      const rel = relPath ? `${relPath}/${entry.name}` : entry.name;
-      // Protect agent-generated content
-      if (rel === "memory" || rel === "MEMORY.md") continue;
-      const srcFull = path.join(src, entry.name);
-      const destFull = path.join(dest, entry.name);
-      if (entry.isDirectory()) {
-        syncDir(srcFull, destFull, rel);
+  if (fs.existsSync(imageWorkspaceDir)) {
+    const imageFiles = new Set(fs.readdirSync(imageWorkspaceDir));
+    // Copy/overwrite all files from image to volume
+    for (const file of imageFiles) {
+      const srcPath = path.join(imageWorkspaceDir, file);
+      const destPath = path.join(WORKSPACE_DIR, file);
+      const isDir = fs.statSync(srcPath).isDirectory();
+      if (isDir) {
+        // For directories (skills/, memory/), copy if not present
+        if (!fs.existsSync(destPath)) {
+          fs.cpSync(srcPath, destPath, { recursive: true });
+          console.log(`[setup] Copied directory ${file} to workspace`);
+        }
       } else {
-        fs.copyFileSync(srcFull, destFull);
-        console.log(`[setup] Synced ${rel}`);
+        // For files (.md, .json), always overwrite to pick up changes
+        fs.cpSync(srcPath, destPath, { recursive: true });
+        console.log(`[setup] Synced ${file} to workspace`);
       }
     }
-  }
-  if (fs.existsSync(imageWorkspaceDir)) {
-    syncDir(imageWorkspaceDir, WORKSPACE_DIR, "");
-    // Remove stale .md files from volume root that are no longer in the image
-    const imageFiles = new Set(fs.readdirSync(imageWorkspaceDir));
+    // Remove stale .md files from volume that are no longer in the image
+    // (e.g., IDENTITY.md, DEPLOY.md removed to fix personality conflict)
     const volumeFiles = fs.readdirSync(WORKSPACE_DIR);
     for (const file of volumeFiles) {
-      if (file.endsWith(".md") && file !== "MEMORY.md" && !imageFiles.has(file)) {
+      if (file.endsWith(".md") && !imageFiles.has(file)) {
         const stalePath = path.join(WORKSPACE_DIR, file);
         if (fs.statSync(stalePath).isFile()) {
           fs.rmSync(stalePath);
@@ -182,83 +183,17 @@ async function startGateway() {
 
   console.log(`[gateway] ========== TOKEN SYNC COMPLETE ==========`);
 
-  // === MissionBound: Ensure model is Kimi K2.5, not "auto" ===
-  // Config structure: agents.defaults.model = {primary: "openrouter/auto"}
-  //                   agents.defaults.models = {"openrouter/auto": {alias: "OpenRouter"}}
+  // Ensure thinking is off for Kimi K2.5 (returns content:null when thinking=low)
   try {
     const cfgPath = configPath();
-    const cfgRaw = fs.readFileSync(cfgPath, "utf8");
-    const cfg = JSON.parse(cfgRaw);
-
-    console.log(`[gateway] ========== MODEL PATCH ==========`);
-
-    const TARGET_MODEL = "openrouter/moonshotai/kimi-k2.5";
-    let changed = false;
-
-    // Ensure agents.defaults exists
-    if (!cfg.agents) cfg.agents = {};
-    if (!cfg.agents.defaults) cfg.agents.defaults = {};
-    const defaults = cfg.agents.defaults;
-
-    // Fix model.primary
-    if (defaults.model && typeof defaults.model === "object") {
-      // Normal case: model is an object like {primary: "openrouter/auto"}
-      const current = defaults.model.primary;
-      console.log(`[gateway] Current model.primary: ${current}`);
-      if (current !== TARGET_MODEL) {
-        defaults.model.primary = TARGET_MODEL;
-        changed = true;
-        console.log(`[gateway] ✓ model.primary: ${current} → ${TARGET_MODEL}`);
-      }
-    } else if (typeof defaults.model === "string") {
-      // Recovery: our previous code corrupted this to a string — restore object format
-      console.log(`[gateway] model was corrupted to string "${defaults.model}" — restoring object`);
-      defaults.model = { primary: TARGET_MODEL };
-      changed = true;
-    } else {
-      // No model at all — create it
-      console.log("[gateway] No model found — creating");
-      defaults.model = { primary: TARGET_MODEL };
-      changed = true;
-    }
-
-    // Update models map
-    if (!defaults.models) defaults.models = {};
-    if (!defaults.models[TARGET_MODEL]) {
-      defaults.models[TARGET_MODEL] = { alias: "Kimi K2.5" };
-      changed = true;
-      console.log(`[gateway] ✓ Added ${TARGET_MODEL} to models map`);
-    }
-
-    // === Disable thinking mode (critical for Kimi K2.5) ===
-    // Kimi returns content:null when thinking is enabled because it uses
-    // all output tokens for reasoning_tokens. thinkingDefault:"off" forces
-    // Kimi to return normal content instead of reasoning-only output.
-    if (defaults.thinkingDefault !== "off") {
-      defaults.thinkingDefault = "off";
-      changed = true;
-      console.log(`[gateway] ✓ Set thinkingDefault: "off" (required for Kimi K2.5)`);
-    }
-
-    // === Fix trustedProxies so gateway treats proxy connections as local ===
-    if (!cfg.gateway) cfg.gateway = {};
-    if (!cfg.gateway.trustedProxies || !cfg.gateway.trustedProxies.includes("127.0.0.1")) {
-      cfg.gateway.trustedProxies = ["127.0.0.1", "::1"];
-      changed = true;
-      console.log("[gateway] ✓ Set trustedProxies: [127.0.0.1, ::1]");
-    }
-
-    if (changed) {
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+    if (cfg.agents?.defaults && cfg.agents.defaults.thinkingDefault !== "off") {
+      cfg.agents.defaults.thinkingDefault = "off";
       fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
-      console.log("[gateway] ✓ Config saved");
-    } else {
-      console.log("[gateway] Model already correct, no changes needed");
+      console.log('[gateway] ✓ Set thinkingDefault: "off"');
     }
-
-    console.log(`[gateway] Final model.primary: ${cfg.agents.defaults.model?.primary}`);
-    console.log(`[gateway] ========== MODEL PATCH END ==========`);
   } catch (err) {
-    console.error(`[gateway] Model patch failed (non-fatal): ${err.message}`);
+    console.error(`[gateway] thinkingDefault patch failed (non-fatal): ${err.message}`);
   }
 
   const args = [
@@ -738,33 +673,22 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.memory", "true"]));
       console.log("[onboard] ✓ Tools configured: sessions=true, memory=true");
 
-      // === MissionBound: Patch model to Kimi K2.5 after OpenRouter onboard ===
-      // Config structure: agents.defaults.model = {primary: "openrouter/auto"}
+      // === MissionBound: Set OpenRouter model (onboard defaults to openrouter/auto) ===
       if (payload.authChoice === "openrouter-api-key") {
         try {
-          const TARGET = "openrouter/moonshotai/kimi-k2.5";
-          const cfg = JSON.parse(fs.readFileSync(configPath(), "utf8"));
-          if (!cfg.agents) cfg.agents = {};
-          if (!cfg.agents.defaults) cfg.agents.defaults = {};
-          const d = cfg.agents.defaults;
-
-          if (d.model && typeof d.model === "object") {
-            d.model.primary = TARGET;
-          } else {
-            d.model = { primary: TARGET };
-          }
-          if (!d.models) d.models = {};
-          d.models[TARGET] = { alias: "Kimi K2.5" };
-
+          const cfgPath = configPath();
+          const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+          // Find and replace openrouter/auto with kimi-k2.5 wherever model is set
+          const cfgStr = JSON.stringify(cfg);
+          const patched = JSON.parse(cfgStr.replace(/openrouter\/auto/g, "openrouter/moonshotai/kimi-k2.5"));
           // Disable thinking mode — Kimi returns content:null when thinking is enabled
-          d.thinkingDefault = "off";
-
-          fs.writeFileSync(configPath(), JSON.stringify(cfg, null, 2), "utf8");
-          console.log(`[onboard] ✓ Model set to ${TARGET}`);
-          extra += `\n[openrouter] ✓ model set to ${TARGET}\n`;
+          if (patched.agents?.defaults) patched.agents.defaults.thinkingDefault = "off";
+          fs.writeFileSync(cfgPath, JSON.stringify(patched, null, 2), "utf8");
+          console.log("[onboard] ✓ Model changed: openrouter/auto → openrouter/moonshotai/kimi-k2.5 (thinking=off)");
+          extra += "\n[openrouter] model: openrouter/moonshotai/kimi-k2.5 (was auto)\n";
         } catch (err) {
           console.error(`[onboard] Model patch failed: ${err.message}`);
-          extra += `\n[openrouter] model patch error: ${err.message}\n`;
+          extra += `\n[openrouter] model patch failed: ${err.message}\n`;
         }
       }
 
@@ -922,57 +846,6 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
     OPENCLAW_NODE,
     clawArgs(["channels", "add", "--help"]),
   );
-  // Read config file for diagnostics
-  let configContent = null;
-  let configModelRefs = [];
-  try {
-    const cfgRaw = fs.readFileSync(configPath(), "utf8");
-    configContent = JSON.parse(cfgRaw);
-    configModelRefs = cfgRaw.match(/"model"\s*:\s*"[^"]*"/g) || [];
-  } catch (_) {}
-
-  // Read last 50 lines of OpenClaw log for errors
-  let recentLogs = null;
-  try {
-    const today = new Date().toISOString().slice(0, 10);
-    const logPath = `/tmp/openclaw/openclaw-${today}.log`;
-    if (fs.existsSync(logPath)) {
-      const logContent = fs.readFileSync(logPath, "utf8");
-      const lines = logContent.split("\n");
-      recentLogs = lines.slice(-50).join("\n");
-    }
-  } catch (_) {}
-
-  // Test OpenRouter API directly
-  let openrouterTest = null;
-  const orKey = process.env.OPENROUTER_API_KEY;
-  if (orKey) {
-    try {
-      const testRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${orKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "moonshotai/kimi-k2.5",
-          messages: [{ role: "user", content: "Say hello in one word." }],
-          max_tokens: 4096,
-        }),
-      });
-      const testJson = await testRes.json();
-      openrouterTest = {
-        status: testRes.status,
-        model: testJson.model || null,
-        content: testJson.choices?.[0]?.message?.content || null,
-        error: testJson.error || null,
-        usage: testJson.usage || null,
-      };
-    } catch (e) {
-      openrouterTest = { error: e.message };
-    }
-  }
-
   res.json({
     wrapper: {
       node: process.version,
@@ -992,16 +865,6 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
       version: v.output.trim(),
       channelsAddHelpIncludesTelegram: help.output.includes("telegram"),
     },
-    config: {
-      topLevelKeys: configContent ? Object.keys(configContent) : null,
-      modelRefs: configModelRefs,
-      agents: configContent?.agents || null,
-      gateway: configContent?.gateway || null,
-      sessions: configContent?.sessions || null,
-      meta: configContent?.meta || null,
-    },
-    openrouterTest,
-    recentLogs,
   });
 });
 
