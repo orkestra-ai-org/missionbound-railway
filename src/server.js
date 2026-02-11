@@ -102,38 +102,51 @@ async function startGateway() {
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 
-  // Sync MissionBound workspace files from image to volume.
-  // Always overwrite .md files to ensure latest personality is loaded.
-  // Also remove stale files from volume that are no longer in the image.
+  // Recursive sync: overwrite all workspace files from image to volume,
+  // protecting agent-generated content (memory/ dir and MEMORY.md).
   const imageWorkspaceDir = "/root/.openclaw/workspace";
   if (fs.existsSync(imageWorkspaceDir)) {
-    const imageFiles = new Set(fs.readdirSync(imageWorkspaceDir));
-    // Copy/overwrite all files from image to volume
-    for (const file of imageFiles) {
-      const srcPath = path.join(imageWorkspaceDir, file);
-      const destPath = path.join(WORKSPACE_DIR, file);
-      const isDir = fs.statSync(srcPath).isDirectory();
-      if (isDir) {
-        // For directories (skills/, memory/), copy if not present
-        if (!fs.existsSync(destPath)) {
-          fs.cpSync(srcPath, destPath, { recursive: true });
-          console.log(`[setup] Copied directory ${file} to workspace`);
+    const PROTECTED = new Set(["memory"]);
+    const PROTECTED_FILES = new Set(["MEMORY.md"]);
+
+    function syncDir(src, dest) {
+      fs.mkdirSync(dest, { recursive: true });
+      const entries = fs.readdirSync(src, { withFileTypes: true });
+      for (const entry of entries) {
+        const srcPath = path.join(src, entry.name);
+        const destPath = path.join(dest, entry.name);
+        if (entry.isDirectory()) {
+          // Skip protected directories (agent-generated)
+          if (dest === WORKSPACE_DIR && PROTECTED.has(entry.name)) {
+            if (!fs.existsSync(destPath)) {
+              fs.cpSync(srcPath, destPath, { recursive: true });
+              console.log(`[sync] Created protected dir ${entry.name}/`);
+            }
+            continue;
+          }
+          syncDir(srcPath, destPath);
+        } else {
+          // Skip protected files at workspace root (agent-generated)
+          if (dest === WORKSPACE_DIR && PROTECTED_FILES.has(entry.name) && fs.existsSync(destPath)) {
+            continue;
+          }
+          fs.cpSync(srcPath, destPath);
         }
-      } else {
-        // For files (.md, .json), always overwrite to pick up changes
-        fs.cpSync(srcPath, destPath, { recursive: true });
-        console.log(`[setup] Synced ${file} to workspace`);
       }
     }
-    // Remove stale .md files from volume that are no longer in the image
-    // (e.g., IDENTITY.md, DEPLOY.md removed to fix personality conflict)
+
+    syncDir(imageWorkspaceDir, WORKSPACE_DIR);
+    console.log("[sync] ✓ Workspace synced (recursive, memory/ protected)");
+
+    // Remove stale .md files from volume root that are no longer in the image
+    const imageFiles = new Set(fs.readdirSync(imageWorkspaceDir));
     const volumeFiles = fs.readdirSync(WORKSPACE_DIR);
     for (const file of volumeFiles) {
-      if (file.endsWith(".md") && !imageFiles.has(file)) {
+      if (file.endsWith(".md") && !imageFiles.has(file) && !PROTECTED_FILES.has(file)) {
         const stalePath = path.join(WORKSPACE_DIR, file);
         if (fs.statSync(stalePath).isFile()) {
           fs.rmSync(stalePath);
-          console.log(`[setup] Removed stale file ${file} from workspace`);
+          console.log(`[sync] Removed stale file ${file}`);
         }
       }
     }
@@ -183,17 +196,36 @@ async function startGateway() {
 
   console.log(`[gateway] ========== TOKEN SYNC COMPLETE ==========`);
 
-  // Ensure thinking is off for Kimi K2.5 (returns content:null when thinking=low)
+  // Repair volume config: undo damage from previous failed patches
   try {
     const cfgPath = configPath();
     const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-    if (cfg.agents?.defaults && cfg.agents.defaults.thinkingDefault !== "off") {
-      cfg.agents.defaults.thinkingDefault = "off";
+    let changed = false;
+
+    // Fix 1: If agents.defaults.model was corrupted to a string, restore as object
+    if (cfg.agents?.defaults?.model && typeof cfg.agents.defaults.model === "string") {
+      const oldVal = cfg.agents.defaults.model;
+      cfg.agents.defaults.model = { primary: oldVal };
+      console.log(`[repair] Fixed model: string "${oldVal}" → object {primary: "${oldVal}"}`);
+      changed = true;
+    }
+
+    // Fix 2: Remove thinkingDefault="off" if a previous patch set it
+    // (User wants Kimi's thinking mode enabled)
+    if (cfg.agents?.defaults?.thinkingDefault === "off") {
+      delete cfg.agents.defaults.thinkingDefault;
+      console.log('[repair] Removed thinkingDefault: "off" (user wants thinking enabled)');
+      changed = true;
+    }
+
+    if (changed) {
       fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
-      console.log('[gateway] ✓ Set thinkingDefault: "off"');
+      console.log("[repair] ✓ Volume config repaired");
+    } else {
+      console.log("[repair] Config OK, no repair needed");
     }
   } catch (err) {
-    console.error(`[gateway] thinkingDefault patch failed (non-fatal): ${err.message}`);
+    console.error(`[repair] Config repair failed (non-fatal): ${err.message}`);
   }
 
   const args = [
@@ -681,10 +713,8 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
           // Find and replace openrouter/auto with kimi-k2.5 wherever model is set
           const cfgStr = JSON.stringify(cfg);
           const patched = JSON.parse(cfgStr.replace(/openrouter\/auto/g, "openrouter/moonshotai/kimi-k2.5"));
-          // Disable thinking mode — Kimi returns content:null when thinking is enabled
-          if (patched.agents?.defaults) patched.agents.defaults.thinkingDefault = "off";
           fs.writeFileSync(cfgPath, JSON.stringify(patched, null, 2), "utf8");
-          console.log("[onboard] ✓ Model changed: openrouter/auto → openrouter/moonshotai/kimi-k2.5 (thinking=off)");
+          console.log("[onboard] ✓ Model changed: openrouter/auto → openrouter/moonshotai/kimi-k2.5");
           extra += "\n[openrouter] model: openrouter/moonshotai/kimi-k2.5 (was auto)\n";
         } catch (err) {
           console.error(`[onboard] Model patch failed: ${err.message}`);
