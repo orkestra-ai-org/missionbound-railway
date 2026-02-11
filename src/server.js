@@ -102,52 +102,42 @@ async function startGateway() {
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 
-  // Recursive sync: overwrite all workspace files from image to volume,
-  // protecting agent-generated content (memory/ dir and MEMORY.md).
+  // === MissionBound: Sync workspace files from Docker image to volume ===
   const imageWorkspaceDir = "/root/.openclaw/workspace";
   if (fs.existsSync(imageWorkspaceDir)) {
-    const PROTECTED = new Set(["memory"]);
+    const PROTECTED_DIRS = new Set(["memory"]);
     const PROTECTED_FILES = new Set(["MEMORY.md"]);
 
     function syncDir(src, dest) {
       fs.mkdirSync(dest, { recursive: true });
-      const entries = fs.readdirSync(src, { withFileTypes: true });
-      for (const entry of entries) {
+      for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
         const srcPath = path.join(src, entry.name);
         const destPath = path.join(dest, entry.name);
         if (entry.isDirectory()) {
-          // Skip protected directories (agent-generated)
-          if (dest === WORKSPACE_DIR && PROTECTED.has(entry.name)) {
+          if (dest === WORKSPACE_DIR && PROTECTED_DIRS.has(entry.name)) {
             if (!fs.existsSync(destPath)) {
               fs.cpSync(srcPath, destPath, { recursive: true });
-              console.log(`[sync] Created protected dir ${entry.name}/`);
+              console.log(`[sync] Created ${entry.name}/`);
             }
             continue;
           }
           syncDir(srcPath, destPath);
         } else {
-          // Skip protected files at workspace root (agent-generated)
-          if (dest === WORKSPACE_DIR && PROTECTED_FILES.has(entry.name) && fs.existsSync(destPath)) {
-            continue;
-          }
+          if (dest === WORKSPACE_DIR && PROTECTED_FILES.has(entry.name) && fs.existsSync(destPath)) continue;
           fs.cpSync(srcPath, destPath);
         }
       }
     }
 
     syncDir(imageWorkspaceDir, WORKSPACE_DIR);
-    console.log("[sync] ✓ Workspace synced (recursive, memory/ protected)");
+    console.log("[sync] ✓ Workspace synced");
 
-    // Remove stale .md files from volume root that are no longer in the image
+    // Remove stale .md files no longer in image
     const imageFiles = new Set(fs.readdirSync(imageWorkspaceDir));
-    const volumeFiles = fs.readdirSync(WORKSPACE_DIR);
-    for (const file of volumeFiles) {
+    for (const file of fs.readdirSync(WORKSPACE_DIR)) {
       if (file.endsWith(".md") && !imageFiles.has(file) && !PROTECTED_FILES.has(file)) {
-        const stalePath = path.join(WORKSPACE_DIR, file);
-        if (fs.statSync(stalePath).isFile()) {
-          fs.rmSync(stalePath);
-          console.log(`[sync] Removed stale file ${file}`);
-        }
+        const p = path.join(WORKSPACE_DIR, file);
+        if (fs.statSync(p).isFile()) { fs.rmSync(p); console.log(`[sync] Removed stale ${file}`); }
       }
     }
   }
@@ -196,38 +186,6 @@ async function startGateway() {
 
   console.log(`[gateway] ========== TOKEN SYNC COMPLETE ==========`);
 
-  // Repair volume config: undo damage from previous failed patches
-  try {
-    const cfgPath = configPath();
-    const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-    let changed = false;
-
-    // Fix 1: If agents.defaults.model was corrupted to a string, restore as object
-    if (cfg.agents?.defaults?.model && typeof cfg.agents.defaults.model === "string") {
-      const oldVal = cfg.agents.defaults.model;
-      cfg.agents.defaults.model = { primary: oldVal };
-      console.log(`[repair] Fixed model: string "${oldVal}" → object {primary: "${oldVal}"}`);
-      changed = true;
-    }
-
-    // Fix 2: Remove thinkingDefault="off" if a previous patch set it
-    // (User wants Kimi's thinking mode enabled)
-    if (cfg.agents?.defaults?.thinkingDefault === "off") {
-      delete cfg.agents.defaults.thinkingDefault;
-      console.log('[repair] Removed thinkingDefault: "off" (user wants thinking enabled)');
-      changed = true;
-    }
-
-    if (changed) {
-      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
-      console.log("[repair] ✓ Volume config repaired");
-    } else {
-      console.log("[repair] Config OK, no repair needed");
-    }
-  } catch (err) {
-    console.error(`[repair] Config repair failed (non-fatal): ${err.message}`);
-  }
-
   const args = [
     "gateway",
     "run",
@@ -241,13 +199,28 @@ async function startGateway() {
     OPENCLAW_GATEWAY_TOKEN,
   ];
 
+  // Read the .env file to get the API key for the gateway process
+  let gatewayEnv = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: STATE_DIR,
+    OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
+  };
+
+  try {
+    const envPath = path.join(STATE_DIR, ".env");
+    const envContent = fs.readFileSync(envPath, "utf8");
+    const match = envContent.match(/OPENAI_API_KEY=(.+)/);
+    if (match && match[1]) {
+      gatewayEnv.OPENAI_API_KEY = match[1].trim();
+      console.log(`[gateway] Found OPENAI_API_KEY in .env, passing to gateway process`);
+    }
+  } catch (err) {
+    console.warn(`[gateway] Could not read .env file: ${err.message}`);
+  }
+
   gatewayProc = childProcess.spawn(OPENCLAW_NODE, clawArgs(args), {
     stdio: "inherit",
-    env: {
-      ...process.env,
-      OPENCLAW_STATE_DIR: STATE_DIR,
-      OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
-    },
+    env: gatewayEnv,
   });
 
   console.log(`[gateway] starting with command: ${OPENCLAW_NODE} ${clawArgs(args).join(" ")}`);
@@ -407,6 +380,72 @@ app.get("/setup/api/status", requireSetupAuth, async (_req, res) => {
       options: [
         { value: "atlas-api-key", label: "Atlas Cloud API key" },
       ],
+      models: [
+        {
+          id: "moonshotai/kimi-k2.5",
+          name: "Moonshot Kimi K2.5 (default)",
+          description: "Flagship model with advanced reasoning and long context",
+          contextWindow: 327680,
+          inputPrice: 0.55,
+          outputPrice: 2.00,
+        },
+        {
+          id: "minimaxai/minimax-m2.1",
+          name: "MiniMax M2.1",
+          description: "Lightweight 10B model, optimized for coding",
+          contextWindow: 196600,
+          inputPrice: 0.30,
+          outputPrice: 1.20,
+        },
+        {
+          id: "deepseek-ai/deepseek-r1",
+          name: "DeepSeek R1",
+          description: "Reasoning-optimized model with chain-of-thought",
+          contextWindow: 163800,
+          inputPrice: 0.28,
+          outputPrice: 0.40,
+        },
+        {
+          id: "zai-org/glm-4.7",
+          name: "Z.AI GLM-4.7",
+          description: "Chinese-optimized large language model",
+          contextWindow: 202800,
+          inputPrice: 0.52,
+          outputPrice: 1.95,
+        },
+        {
+          id: "kwai-kat/kat-coder-pro",
+          name: "KwaiKAT Coder Pro",
+          description: "Specialized coding model with 256K context",
+          contextWindow: 256000,
+          inputPrice: 0.30,
+          outputPrice: 1.20,
+        },
+        {
+          id: "moonshot-ai/moonshot-v1-128k",
+          name: "Moonshot V1 128K",
+          description: "Long-context model (128K tokens)",
+          contextWindow: 262100,
+          inputPrice: 0.60,
+          outputPrice: 2.50,
+        },
+        {
+          id: "zhipu-ai/glm-4-5b-plus",
+          name: "Zhipu GLM-4 5B Plus",
+          description: "Efficient 5B parameter model",
+          contextWindow: 202800,
+          inputPrice: 0.44,
+          outputPrice: 1.74,
+        },
+        {
+          id: "qwen/qwen-2.5-coder-32b-instruct",
+          name: "Qwen 2.5 Coder 32B",
+          description: "Code-specialized model",
+          contextWindow: 262100,
+          inputPrice: 0.69,
+          outputPrice: 2.70,
+        },
+      ],
     },
     {
       value: "moonshot",
@@ -545,7 +584,7 @@ function buildOnboardArgs(payload) {
   return args;
 }
 
-function runCmd(cmd, args, opts = {}) {
+function runCmd(cmd, args, opts = {}, extraEnv = {}) {
   return new Promise((resolve) => {
     const proc = childProcess.spawn(cmd, args, {
       ...opts,
@@ -553,6 +592,7 @@ function runCmd(cmd, args, opts = {}) {
         ...process.env,
         OPENCLAW_STATE_DIR: STATE_DIR,
         OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
+        ...extraEnv, // Add extra environment variables
       },
     });
 
@@ -592,7 +632,17 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
     console.log(`[onboard] Onboard command args include: --gateway-token ${OPENCLAW_GATEWAY_TOKEN.slice(0, 16)}...`);
     console.log(`[onboard] Full onboard command: node ${clawArgs(onboardArgs).join(' ').replace(OPENCLAW_GATEWAY_TOKEN, OPENCLAW_GATEWAY_TOKEN.slice(0, 16) + '...')}`);
 
-    const onboard = await runCmd(OPENCLAW_NODE, clawArgs(onboardArgs));
+    // For Atlas Cloud, pass environment variables to onboarding
+    // This ensures the OpenAI provider is configured with the correct base URL
+    let onboard;
+    if (payload.authChoice === "atlas-api-key") {
+      console.log(`[onboard] Running Atlas Cloud onboarding with OPENAI_BASE_URL=https://api.atlascloud.ai/v1/`);
+      onboard = await runCmd(OPENCLAW_NODE, clawArgs(onboardArgs), {}, {
+        OPENAI_BASE_URL: "https://api.atlascloud.ai/v1/",
+      });
+    } else {
+      onboard = await runCmd(OPENCLAW_NODE, clawArgs(onboardArgs));
+    }
 
     let extra = "";
 
@@ -695,30 +745,26 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
         clawArgs(["config", "set", "gateway.controlUi.allowInsecureAuth", "true"]),
       );
 
-      // === MissionBound: Ensure bootstrap loads full workspace files ===
+      // === MissionBound: Bootstrap + tools config ===
       await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agent.bootstrapMaxChars", "50000"]));
       await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agent.skipBootstrap", "false"]));
-      console.log("[onboard] ✓ Bootstrap configured: maxChars=50000, skipBootstrap=false");
-
-      // === MissionBound: Enable session persistence and memory ===
       await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.sessions", "true"]));
       await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.memory", "true"]));
-      console.log("[onboard] ✓ Tools configured: sessions=true, memory=true");
+      console.log("[onboard] ✓ MissionBound: bootstrap=50k, sessions+memory=true");
 
-      // === MissionBound: Set OpenRouter model (onboard defaults to openrouter/auto) ===
+      // === MissionBound: Route OpenRouter to Kimi K2.5 ===
       if (payload.authChoice === "openrouter-api-key") {
         try {
           const cfgPath = configPath();
-          const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-          // Find and replace openrouter/auto with kimi-k2.5 wherever model is set
-          const cfgStr = JSON.stringify(cfg);
-          const patched = JSON.parse(cfgStr.replace(/openrouter\/auto/g, "openrouter/moonshotai/kimi-k2.5"));
-          fs.writeFileSync(cfgPath, JSON.stringify(patched, null, 2), "utf8");
-          console.log("[onboard] ✓ Model changed: openrouter/auto → openrouter/moonshotai/kimi-k2.5");
-          extra += "\n[openrouter] model: openrouter/moonshotai/kimi-k2.5 (was auto)\n";
+          const cfgStr = fs.readFileSync(cfgPath, "utf8");
+          const patched = cfgStr.replace(/openrouter\/auto/g, "openrouter/moonshotai/kimi-k2.5");
+          if (patched !== cfgStr) {
+            fs.writeFileSync(cfgPath, patched, "utf8");
+            console.log("[onboard] ✓ Model: openrouter/auto → openrouter/moonshotai/kimi-k2.5");
+            extra += "\n[openrouter] model: openrouter/moonshotai/kimi-k2.5\n";
+          }
         } catch (err) {
           console.error(`[onboard] Model patch failed: ${err.message}`);
-          extra += `\n[openrouter] model patch failed: ${err.message}\n`;
         }
       }
 
@@ -736,7 +782,7 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
             "\n[telegram] skipped (this openclaw build does not list telegram in `channels add --help`)\n";
         } else {
           // Avoid `channels add` here (it has proven flaky across builds); write config directly.
-          // MissionBound: Use allowlist instead of pairing (pairing impossible on Railway SSH).
+          // MissionBound: Use allowlist with TELEGRAM_OWNER_ID (pairing impossible on Railway).
           const token = payload.telegramToken.trim();
           const telegramOwnerId = process.env.TELEGRAM_OWNER_ID || "";
           const cfgObj = {
@@ -747,12 +793,6 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
             groupPolicy: "allowlist",
             streamMode: "partial",
           };
-          if (telegramOwnerId) {
-            console.log(`[telegram] Using allowlist mode with owner ID: ${telegramOwnerId}`);
-          } else {
-            console.log("[telegram] WARNING: TELEGRAM_OWNER_ID not set, falling back to pairing mode");
-            console.log("[telegram] Set TELEGRAM_OWNER_ID in Railway env vars to bypass pairing");
-          }
           const set = await runCmd(
             OPENCLAW_NODE,
             clawArgs([
@@ -835,23 +875,52 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       }
 
       // Configure Atlas Cloud if selected (using OpenAI-compatible endpoint)
+      console.log(`[atlas] Checking authChoice: "${payload.authChoice}"`);
       if (payload.authChoice === "atlas-api-key") {
-        // Set OpenAI as the model provider
+        const atlasModel = payload.atlasModel || "moonshotai/kimi-k2.5";
+        console.log(`[atlas] Configuring Atlas Cloud provider with model: ${atlasModel}`);
+
+        // Set models.mode to merge (doesn't clobber existing providers)
         await runCmd(
           OPENCLAW_NODE,
-          clawArgs(["config", "set", "model.provider", "openai"]),
+          clawArgs(["config", "set", "models.mode", "merge"]),
         );
-        // Set the OpenAI-compatible base URL
-        await runCmd(
+
+        // Configure Atlas Cloud as a custom OpenAI-compatible provider with all available models
+        const providerConfig = {
+          baseUrl: "https://api.atlascloud.ai/v1/",
+          apiKey: "${OPENAI_API_KEY}",
+          api: "openai-completions",
+          models: [
+            { id: "moonshotai/kimi-k2.5", name: "Moonshot Kimi K2.5" },
+            { id: "minimaxai/minimax-m2.1", name: "MiniMax M2.1" },
+            { id: "deepseek-ai/deepseek-r1", name: "DeepSeek R1" },
+            { id: "zai-org/glm-4.7", name: "Z.AI GLM-4.7" },
+            { id: "kwai-kat/kat-coder-pro", name: "KwaiKAT Coder Pro" },
+            { id: "moonshot-ai/moonshot-v1-128k", name: "Moonshot V1 128K" },
+            { id: "zhipu-ai/glm-4-5b-plus", name: "Zhipu GLM-4 5B Plus" },
+            { id: "qwen/qwen-2.5-coder-32b-instruct", name: "Qwen 2.5 Coder 32B" },
+          ]
+        };
+
+        console.log(`[atlas] Provider config:`, JSON.stringify(providerConfig));
+
+        const setProviderResult = await runCmd(
           OPENCLAW_NODE,
-          clawArgs(["config", "set", "env.OPENAI_BASE_URL", "https://api.atlascloud.ai/v1/"]),
+          clawArgs(["config", "set", "--json", "models.providers.atlas", JSON.stringify(providerConfig)]),
         );
-        // Set the default model
-        await runCmd(
+        console.log(`[atlas] Set provider result: exit=${setProviderResult.code}`, setProviderResult.output || "(no output)");
+
+        // Set the active model to use Atlas Cloud (use / not :)
+        const setModelResult = await runCmd(
           OPENCLAW_NODE,
-          clawArgs(["config", "set", "model", "minimaxai/minimax-m2.1"]),
+          clawArgs(["config", "set", "agents.defaults.model.primary", `atlas/${atlasModel}`]),
         );
-        extra += "\n[atlas] configured Atlas Cloud with OpenAI-compatible endpoint (provider: openai, model: minimaxai/minimax-m2.1)\n";
+        console.log(`[atlas] Set model result: exit=${setModelResult.code}`, setModelResult.output || "(no output)");
+
+        extra += `\n[atlas] configured Atlas Cloud provider (model: ${atlasModel})\n`;
+      } else {
+        console.log(`[atlas] Skipping Atlas Cloud configuration (authChoice was: ${payload.authChoice})`);
       }
 
       // Apply changes immediately.
