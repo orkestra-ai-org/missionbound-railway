@@ -746,25 +746,37 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       );
 
       // === MissionBound: Bootstrap + tools config ===
-      await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agent.bootstrapMaxChars", "50000"]));
-      await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "agent.skipBootstrap", "false"]));
-      await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.sessions", "true"]));
-      await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "tools.memory", "true"]));
-      console.log("[onboard] ✓ MissionBound: bootstrap=50k, sessions+memory=true");
+      // Note: agent.* keys moved to agents.defaults.* in OpenClaw 2026.2.10
+      // Direct JSON patching is more reliable than config set for non-standard keys
 
-      // === MissionBound: Route OpenRouter to Kimi K2.5 ===
+      // === MissionBound: Route OpenRouter to Kimi K2.5 + configure agent ===
       if (payload.authChoice === "openrouter-api-key") {
         try {
           const cfgPath = configPath();
-          const cfgStr = fs.readFileSync(cfgPath, "utf8");
-          const patched = cfgStr.replace(/openrouter\/auto/g, "openrouter/moonshotai/kimi-k2.5");
-          if (patched !== cfgStr) {
-            fs.writeFileSync(cfgPath, patched, "utf8");
-            console.log("[onboard] ✓ Model: openrouter/auto → openrouter/moonshotai/kimi-k2.5");
-            extra += "\n[openrouter] model: openrouter/moonshotai/kimi-k2.5\n";
+          const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+
+          // 1. Route to Kimi K2.5 (replace all occurrences of openrouter/auto)
+          const cfgStr = JSON.stringify(cfg);
+          const patched = JSON.parse(cfgStr.replace(/openrouter\/auto/g, "openrouter/moonshotai/kimi-k2.5"));
+
+          // 2. Disable OpenClaw's thinking parameter for API calls
+          //    thinking=low causes Kimi to return content:null via OpenRouter
+          //    Kimi K2.5 still reasons naturally — this just prevents the API thinking param
+          if (patched.agents?.defaults) {
+            patched.agents.defaults.thinkingDefault = "off";
+            patched.agents.defaults.bootstrapMaxChars = 50000;
           }
+
+          // 3. Trust loopback proxy (suppresses warning on every connection)
+          if (patched.gateway) {
+            patched.gateway.trustedProxies = ["127.0.0.1", "::1"];
+          }
+
+          fs.writeFileSync(cfgPath, JSON.stringify(patched, null, 2), "utf8");
+          console.log("[onboard] ✓ Kimi K2.5 configured (thinkingDefault=off, bootstrap=50k)");
+          extra += "\n[openrouter] model: kimi-k2.5, thinkingDefault=off\n";
         } catch (err) {
-          console.error(`[onboard] Model patch failed: ${err.message}`);
+          console.error(`[onboard] Config patch failed: ${err.message}`);
         }
       }
 
