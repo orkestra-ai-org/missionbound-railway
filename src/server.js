@@ -745,36 +745,54 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
         clawArgs(["config", "set", "gateway.controlUi.allowInsecureAuth", "true"]),
       );
 
-      // === MissionBound: Bootstrap + tools config ===
-      // Note: agent.* keys moved to agents.defaults.* in OpenClaw 2026.2.10
-      // Direct JSON patching is more reliable than config set for non-standard keys
-
-      // === MissionBound: Route OpenRouter to Kimi K2.5 + configure agent ===
+      // === MissionBound: Configure Kimi K2.5 via custom provider ===
+      // Kimi K2.5 is NOT in OpenClaw's internal model catalog (issue #5241).
+      // Setting openrouter/moonshotai/kimi-k2.5 directly → "Unknown model" → empty response.
+      // Fix: define a custom provider pointing to OpenRouter (same pattern as Atlas Cloud).
       if (payload.authChoice === "openrouter-api-key") {
         try {
           const cfgPath = configPath();
           const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+          const apiKey = (payload.authSecret || "").trim();
 
-          // 1. Route to Kimi K2.5 (replace all occurrences of openrouter/auto)
-          const cfgStr = JSON.stringify(cfg);
-          const patched = JSON.parse(cfgStr.replace(/openrouter\/auto/g, "openrouter/moonshotai/kimi-k2.5"));
+          // 1. Custom provider for Kimi K2.5 via OpenRouter
+          if (!cfg.models) cfg.models = {};
+          cfg.models.mode = "merge";
+          if (!cfg.models.providers) cfg.models.providers = {};
+          cfg.models.providers["kimi-or"] = {
+            baseUrl: "https://openrouter.ai/api/v1",
+            apiKey: apiKey,
+            api: "openai-completions",
+            models: [
+              {
+                id: "moonshotai/kimi-k2.5",
+                name: "Kimi K2.5",
+                contextWindow: 262144,
+                maxTokens: 8192,
+              },
+            ],
+          };
 
-          // 2. Disable OpenClaw's thinking parameter for API calls
-          //    thinking=low causes Kimi to return content:null via OpenRouter
-          //    Kimi K2.5 still reasons naturally — this just prevents the API thinking param
-          if (patched.agents?.defaults) {
-            patched.agents.defaults.thinkingDefault = "off";
-            patched.agents.defaults.bootstrapMaxChars = 50000;
+          // 2. Set model to use custom provider
+          if (!cfg.agents) cfg.agents = {};
+          if (!cfg.agents.defaults) cfg.agents.defaults = {};
+          cfg.agents.defaults.model = { primary: "kimi-or/moonshotai/kimi-k2.5" };
+          cfg.agents.defaults.models = {
+            "kimi-or/moonshotai/kimi-k2.5": { alias: "Kimi K2.5" },
+          };
+
+          // 3. Disable thinking parameter (causes content:null via OpenRouter)
+          cfg.agents.defaults.thinkingDefault = "off";
+          cfg.agents.defaults.bootstrapMaxChars = 50000;
+
+          // 4. Trust loopback proxy
+          if (cfg.gateway) {
+            cfg.gateway.trustedProxies = ["127.0.0.1", "::1"];
           }
 
-          // 3. Trust loopback proxy (suppresses warning on every connection)
-          if (patched.gateway) {
-            patched.gateway.trustedProxies = ["127.0.0.1", "::1"];
-          }
-
-          fs.writeFileSync(cfgPath, JSON.stringify(patched, null, 2), "utf8");
-          console.log("[onboard] ✓ Kimi K2.5 configured (thinkingDefault=off, bootstrap=50k)");
-          extra += "\n[openrouter] model: kimi-k2.5, thinkingDefault=off\n";
+          fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
+          console.log("[onboard] ✓ Kimi K2.5 configured via custom provider kimi-or");
+          extra += "\n[kimi] model: kimi-or/moonshotai/kimi-k2.5 (custom provider → OpenRouter)\n";
         } catch (err) {
           console.error(`[onboard] Config patch failed: ${err.message}`);
         }
