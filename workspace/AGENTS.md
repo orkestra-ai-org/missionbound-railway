@@ -241,31 +241,37 @@ Si un workflow échoue après un changement de version → rollback automatique 
 
 ### 6.2.1 COMMENT Écrire dans MEMORY.md (CRITIQUE)
 
-**La mémoire ne se sauvegarde PAS automatiquement.** Tu DOIS écrire activement dans MEMORY.md via `fs:write` (append).
+**La mémoire ne se sauvegarde PAS automatiquement.** Tu DOIS écrire activement.
+
+**UTILISER UNIQUEMENT le tool `fs:write`** pour écrire dans les fichiers.
+**NE JAMAIS utiliser `exec` + `cat`/`echo`/heredoc** — `sh` ne supporte pas les heredocs et `exec` n'est PAS fait pour écrire des fichiers.
 
 **Protocole fin de session :**
-```
-1. LIRE MEMORY.md existant (ne jamais écraser)
-2. AJOUTER une nouvelle entrée en bas du fichier, section "## Entrées" :
+1. LIRE MEMORY.md avec `fs:read` path="MEMORY.md"
+2. AJOUTER une nouvelle entrée en bas, section "## Entrées" :
+   ```
    ### [YYYY-MM-DD HH:MM UTC] — [Type: Action|Decision|Learning|Error]
    **Contexte** : ...
    **Action** : ...
    **Résultat** : ...
    **Learning** : ...
-3. SAUVEGARDER via fs:write (append to file, ne pas overwrite)
-```
+   ```
+3. ÉCRIRE le fichier complet (ancien contenu + nouvelle entrée) avec `fs:write` path="MEMORY.md"
 
 **Protocole daily log :**
-```
-1. Créer/mettre à jour memory/YYYY-MM-DD.md
+1. Lire `memory/YYYY-MM-DD.md` avec `fs:read` (créer si inexistant)
 2. Ajouter les actions, décisions, et learnings du jour
-3. Ce fichier sera chargé automatiquement à la prochaine session
-```
+3. Écrire avec `fs:write` path="memory/YYYY-MM-DD.md"
 
 **SI tu ne sais pas quoi écrire**, écris au minimum :
 - Date et heure de la session
 - Sujet principal discuté avec le CEO
 - Toute décision prise ou action effectuée
+
+**INTERDIT :**
+- `exec` + `cat <<EOF` (erreur: `sh` ne supporte pas les heredocs)
+- `exec` + `echo "..." > fichier` (pas fiable, caractères spéciaux)
+- Toute écriture de fichier via `exec` — utiliser `fs:write` exclusivement
 
 ### 6.3 Enterprise Memory — PR-like Pipeline (VISION 6.2)
 
