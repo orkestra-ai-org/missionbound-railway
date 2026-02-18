@@ -785,14 +785,44 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
           cfg.agents.defaults.thinkingDefault = "off";
           cfg.agents.defaults.bootstrapMaxChars = 50000;
 
-          // 4. Trust loopback proxy
+          // 4. Memory search — enable semantic memory across sessions
+          cfg.agents.defaults.memorySearch = {
+            enabled: true,
+            sources: ["memory", "sessions"],
+            sync: { watch: true },
+            cache: { enabled: true },
+          };
+          // Auto-detect embedding provider from env vars
+          if (process.env.OPENAI_API_KEY) {
+            cfg.agents.defaults.memorySearch.provider = "openai";
+            cfg.agents.defaults.memorySearch.model = "text-embedding-3-small";
+            console.log("[onboard] ✓ memorySearch: provider=openai (OPENAI_API_KEY found)");
+          } else if (process.env.GEMINI_API_KEY) {
+            cfg.agents.defaults.memorySearch.provider = "gemini";
+            cfg.agents.defaults.memorySearch.model = "gemini-embedding-001";
+            console.log("[onboard] ✓ memorySearch: provider=gemini (GEMINI_API_KEY found)");
+          } else {
+            console.warn("[onboard] ⚠️ memorySearch: no embedding API key found (OPENAI_API_KEY or GEMINI_API_KEY). memory_search will be keyword-only (BM25).");
+          }
+
+          // 5. Pre-compaction memory flush — auto-save context before compaction
+          cfg.agents.defaults.compaction = {
+            memoryFlush: {
+              enabled: true,
+              softThresholdTokens: 40000,
+            },
+          };
+          console.log("[onboard] ✓ compaction.memoryFlush enabled (threshold: 40k tokens)");
+
+          // 6. Trust loopback proxy
           if (cfg.gateway) {
             cfg.gateway.trustedProxies = ["127.0.0.1", "::1"];
           }
 
           fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), "utf8");
-          console.log("[onboard] ✓ Kimi K2.5 configured via custom provider kimi-or");
+          console.log("[onboard] ✓ Kimi K2.5 + memory configured via custom provider kimi-or");
           extra += "\n[kimi] model: kimi-or/moonshotai/kimi-k2.5 (custom provider → OpenRouter)\n";
+          extra += "[memory] memorySearch=enabled, memoryFlush=enabled\n";
         } catch (err) {
           console.error(`[onboard] Config patch failed: ${err.message}`);
         }

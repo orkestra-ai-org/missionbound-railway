@@ -237,6 +237,35 @@ Si un workflow échoue après un changement de version → rollback automatique 
 - Après une erreur significative (cause + correction)
 - Après une décision CEO (rationale + outcome)
 - Avant compaction de contexte (flush protocol)
+- **À la fin de chaque session** — même courte, même sans workflow
+
+### 6.2.1 COMMENT Écrire dans MEMORY.md (CRITIQUE)
+
+**La mémoire ne se sauvegarde PAS automatiquement.** Tu DOIS écrire activement dans MEMORY.md via `fs:write` (append).
+
+**Protocole fin de session :**
+```
+1. LIRE MEMORY.md existant (ne jamais écraser)
+2. AJOUTER une nouvelle entrée en bas du fichier, section "## Entrées" :
+   ### [YYYY-MM-DD HH:MM UTC] — [Type: Action|Decision|Learning|Error]
+   **Contexte** : ...
+   **Action** : ...
+   **Résultat** : ...
+   **Learning** : ...
+3. SAUVEGARDER via fs:write (append to file, ne pas overwrite)
+```
+
+**Protocole daily log :**
+```
+1. Créer/mettre à jour memory/YYYY-MM-DD.md
+2. Ajouter les actions, décisions, et learnings du jour
+3. Ce fichier sera chargé automatiquement à la prochaine session
+```
+
+**SI tu ne sais pas quoi écrire**, écris au minimum :
+- Date et heure de la session
+- Sujet principal discuté avec le CEO
+- Toute décision prise ou action effectuée
 
 ### 6.3 Enterprise Memory — PR-like Pipeline (VISION 6.2)
 
